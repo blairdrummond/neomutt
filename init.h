@@ -2110,12 +2110,6 @@ struct Option MuttVars[] = {
    ** This variable specifies the default Notmuch database in format
    ** notmuch://<absolute path>.
    */
-  { "nm_hidden_tags", DT_STRING, R_NONE, UL &NmHiddenTags, UL "unread,draft,flagged,passed,replied,attachment,signed,encrypted" },
-  /*
-   ** .pp
-   ** This variable specifies private notmuch tags which should not be printed
-   ** on screen.
-   */
   { "nm_exclude_tags", DT_STRING,  R_NONE, UL &NmExcludeTags, 0 },
   /*
    ** .pp
@@ -2187,6 +2181,12 @@ struct Option MuttVars[] = {
   ** directly from the pager, and screen resizes cause lines longer than
   ** the screen width to be badly formatted in the help menu.
   */
+  { "hidden_tags", DT_STRING, R_NONE, UL &HiddenTags, UL "unread,draft,flagged,passed,replied,attachment,signed,encrypted" },
+  /*
+   ** .pp
+   ** This variable specifies private notmuch tags which should not be printed
+   ** on screen.
+   */
   { "pager_context",    DT_NUMBER,  R_NONE, UL &PagerContext, 0 },
   /*
   ** .pp
@@ -4583,12 +4583,10 @@ static int parse_unalternates(struct Buffer *buf, struct Buffer *s,
 static int parse_group_context(struct GroupContext **ctx, struct Buffer *buf,
                                struct Buffer *s, unsigned long data, struct Buffer *err);
 
-#ifdef USE_NOTMUCH
 static int parse_tag_transforms(struct Buffer *buf, struct Buffer *s,
                                 unsigned long data, struct Buffer *err);
 static int parse_tag_formats(struct Buffer *buf, struct Buffer *s,
                              unsigned long data, struct Buffer *err);
-#endif
 
 #ifdef USE_IMAP
 static int parse_subscribe_to(struct Buffer *buf, struct Buffer *s,
@@ -4668,10 +4666,8 @@ const struct Command Commands[] = {
 #ifdef USE_IMAP
   { "subscribe-to",        parse_subscribe_to,     0 },
 #endif
-#ifdef USE_NOTMUCH
   { "tag-formats",         parse_tag_formats,      0 },
   { "tag-transforms",      parse_tag_transforms,   0 },
-#endif
   { "timeout-hook",        mutt_parse_hook,        MUTT_TIMEOUTHOOK | MUTT_GLOBALHOOK },
   { "toggle",              parse_set,              MUTT_SET_INV },
   { "unalias",             parse_unalias,          0 },
