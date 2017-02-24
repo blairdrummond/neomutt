@@ -835,6 +835,8 @@ dnl -- end cache --
 AC_SUBST(MUTT_LIB_OBJECTS)
 AC_SUBST(HCACHE_LIBS)
 AC_SUBST(HCACHE_DEPS)
+AC_SUBST(LIBUNITTEST)
+AC_SUBST(LIBUNITTESTDEPS)
 
 dnl -- iconv/gettext --
 
@@ -947,7 +949,7 @@ if test x$full_doc != xno; then
 	AC_DEFINE(MAKEDOC_FULL,1, [Define if you want complete documentation.])
 fi
 
-AC_CONFIG_FILES(Makefile contrib/Makefile doc/Makefile imap/Makefile
+AC_CONFIG_FILES(Makefile contrib/Makefile doc/Makefile imap/Makefile unit-test/Makefile
 	m4/Makefile po/Makefile.in hcache/Makefile ncrypt/Makefile lib/Makefile)
 AC_OUTPUT
 

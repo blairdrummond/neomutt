@@ -36,6 +36,10 @@ if BUILD_PO
 SUBDIRS += po
 endif
 
+if BUILD_UNITTEST
+SUBDIR += unit-test
+endif
+
 distdir = $(PACKAGE)-$(VERSION)
 
 BUILT_SOURCES = conststrings.c git_ver.h
@@ -66,10 +70,10 @@ LIBMUTT = -Llib -lmutt
 LIBMUTTDEPS = $(top_srcdir)/lib/lib.h lib/libmutt.a
 
 neomutt_LDADD = $(MUTT_LIB_OBJECTS) $(LIBOBJS) $(HCACHE_LIBS) $(NCRYPT_LIBS) \
-	$(LIBIMAP) $(LIBMUTT) $(LIBICONV) $(GPGME_LIBS) $(INTLLIBS)
+	$(LIBIMAP) $(LIBMUTT) $(LIBICONV) $(GPGME_LIBS) $(INTLLIBS) $(LIBUNITTEST)
 
 neomutt_DEPENDENCIES = $(MUTT_LIB_OBJECTS) $(LIBOBJS) $(LIBIMAPDEPS) \
-	$(LIBMUTTDEPS) $(HCACHE_DEPS) $(NCRYPT_DEPS) $(INTLDEPS)
+	$(LIBMUTTDEPS) $(HCACHE_DEPS) $(NCRYPT_DEPS) $(INTLDEPS) $(LIBUNITTESTDEPS)
 
 DEFS=-DPKGDATADIR=\"$(pkgdatadir)\" -DSYSCONFDIR=\"$(sysconfdir)\" \
 	-DBINDIR=\"$(bindir)\" -DMUTTLOCALEDIR=\"$(datadir)/locale\"

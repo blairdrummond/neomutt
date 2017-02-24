@@ -38,6 +38,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "lib/lib.h"
+#ifdef WITH_UNITTEST
+extern int cutest_main(int, const char **);
+#endif
 #include "mutt.h"
 #include "address.h"
 #include "alias.h"
@@ -280,7 +283,7 @@ int main(int argc, char **argv, char **env)
 
     /* USE_NNTP 'g:G' */
     if ((i = getopt(argc, argv,
-                    "+A:a:Bb:F:f:c:Dd:l:Ee:g:GH:s:i:hm:npQ:RSvxyzZ")) != EOF)
+                    "+A:a:Bb:F:f:c:Dd:l:Ee:g:GH:s:i:hm:npQ:RSTvxyzZ")) != EOF)
       switch (i)
       {
         case 'A':
@@ -383,6 +386,18 @@ int main(int argc, char **argv, char **env)
         case 'S':
           hide_sensitive = true;
           break;
+
+        case 'T':
+#ifdef WITH_UNITTEST
+        {
+          const char *args[] = {"mutt", "--no-exec"};
+          exit(cutest_main(2, args));
+        }
+#else
+          puts(_("NeoMutt was built without unit-tests."));
+          exit(1);
+#endif
+        break;
 
         case 's':
           subject = optarg;
