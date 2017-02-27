@@ -69,6 +69,7 @@ WHERE char *Escape;
 WHERE char *FolderFormat;
 WHERE char *ForwardAttributionIntro;
 WHERE char *ForwardAttributionTrailer;
+WHERE char *NetFolderFormat;
 WHERE char *ForwardFormat;
 WHERE char *Hostname;
 WHERE struct MbTable *FromChars;
