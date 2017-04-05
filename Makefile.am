@@ -37,7 +37,7 @@ SUBDIRS += po
 endif
 
 if BUILD_UNITTEST
-SUBDIR += unit-test
+SUBDIRS += unit-test
 endif
 
 distdir = $(PACKAGE)-$(VERSION)
