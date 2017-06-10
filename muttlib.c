@@ -964,9 +964,8 @@ void mutt_expando_format(char *dest, size_t destlen, size_t col, int cols,
     {
       struct Buffer *srcbuf = NULL, *word = NULL, *command = NULL;
       char srccopy[LONG_STRING];
-#ifdef DEBUG
-      int i = 0;
-#endif
+
+      int i = 0; // for debugging
 
       mutt_debug(3, "fmtpipe = %s\n", src);
 
@@ -989,7 +988,9 @@ void mutt_expando_format(char *dest, size_t destlen, size_t col, int cols,
         if (word->data)
           *word->data = '\0';
         mutt_extract_token(word, srcbuf, 0);
+
         mutt_debug(3, "fmtpipe %2d: %s\n", i++, word->data);
+
         mutt_buffer_addch(command, '\'');
         mutt_expando_format(buf, sizeof(buf), 0, cols, word->data, callback,
                             data, flags | MUTT_FORMAT_NOFILTER);
@@ -1887,7 +1888,6 @@ const char *mutt_strsysexit(int e)
   return sysexits_h[i].str;
 }
 
-#ifdef DEBUG
 char debugfilename[_POSIX_PATH_MAX];
 FILE *debugfile = NULL;
 int debuglevel;
@@ -1914,7 +1914,6 @@ void mutt_debug(int level, const char *fmt, ...)
   vfprintf(debugfile, fmt, ap);
   va_end(ap);
 }
-#endif
 
 /**
  * mutt_inbox_cmp - do two folders share the same path and one is an inbox
