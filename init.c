@@ -51,6 +51,7 @@
 #include "header.h"
 #include "history.h"
 #include "keymap.h"
+#include <sys/types.h>
 #include "list.h"
 #include "mailbox.h"
 #include "mbtable.h"
@@ -72,6 +73,10 @@
 #endif
 #ifdef USE_IMAP
 #include "imap/imap.h" /* for imap_subscribe() */
+#endif
+
+#ifdef DEBUG
+static char *saved_DebugFileFormat;
 #endif
 
 #define CHECK_PAGER                                                                  \
@@ -2301,23 +2306,57 @@ char **mutt_envlist(void)
  */
 static void start_debug(void)
 {
-  if (!DebugFile)
-    return;
+  struct stat s;
+  int does_path_exist = stat(DebugDir, &s);
 
-  char buf[_POSIX_PATH_MAX];
-
-  /* rotate the old debug logs */
-  for (int i = 3; i >= 0; i--)
+  if (does_path_exist != 0)
   {
-    snprintf(debugfilename, sizeof(debugfilename), "%s%d", DebugFile, i);
-    snprintf(buf, sizeof(buf), "%s%d", DebugFile, i + 1);
+    // iterate though the directory tree to create every folder
+    for (int i = 0; DebugDir[i] != '\0'; i++)
+    {
+      if (DebugDir[i] == '/')
+      {
+        // temporary replacement
+        DebugDir[i] = '\0';
 
-    mutt_expand_path(debugfilename, sizeof(debugfilename));
-    mutt_expand_path(buf, sizeof(buf));
-    rename(debugfilename, buf);
+        mkdir(DebugDir, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+        DebugDir[i] = '/';
+
+      }
+    }
   }
 
-  if ((debugfile = safe_fopen(debugfilename, "w")) != NULL)
+  char buf[_POSIX_PATH_MAX] = {0};
+
+  time_t t;
+  t = time(NULL);
+
+  struct tm *creation_time = localtime(&t);
+
+  // filename should consist of
+  //  - path
+  //  - current time
+  //  - pid of current program.
+  snprintf(buf, sizeof(buf), "%s", DebugDir);
+
+  int pid = (int) getpid();
+  snprintf(buf + strlen(buf), sizeof(buf), "pid%d-", pid);
+
+  // append to existing part
+  strftime(buf + strlen(buf), sizeof(buf), DebugFile, creation_time);
+
+
+  // save the current name of the DebugFile, to test later if it has changed.
+  // static is needed, because restart_debug needs to read the value later.
+  //
+  // save the current format of DebugFile.
+  // --> PID stays always the same
+  // --> creation_time only changes if a new debugfile is used.
+  //
+  saved_DebugFileFormat = DebugFile;
+
+
+  if ((debugfile = safe_fopen(buf, "w")) != NULL)
   {
     setbuf(debugfile, NULL); /* don't buffer the debugging output! */
     mutt_debug(1, "NeoMutt/%s debugging at level %d\n", PACKAGE_VERSION, debuglevel);
@@ -2327,7 +2366,7 @@ static void start_debug(void)
 /**
  * restart_debug - reload the debugging configuration
  *
- * This method closes the old debug file is debug was enabled,
+ * This method closes the old debug file if debug was enabled,
  * then reconfigure the debugging system from the configuration options
  * and start a new debug file if debug is enabled
  */
@@ -2336,8 +2375,8 @@ static void restart_debug(void)
   bool disable_debug = (debuglevel > 0 && DebugLevel == 0);
   bool enable_debug = (debuglevel == 0 && DebugLevel > 0);
   bool file_changed =
-      ((mutt_strlen(debugfilename) - 1) != mutt_strlen(DebugFile) ||
-       mutt_strncmp(debugfilename, DebugFile, mutt_strlen(debugfilename) - 1));
+      ((mutt_strlen(saved_DebugFileFormat)) != mutt_strlen(DebugFile) ||
+       mutt_strcmp(saved_DebugFileFormat, DebugFile));
 
   if (disable_debug || file_changed)
   {

@@ -241,6 +241,7 @@ WHERE short NntpContext;
 
 #ifdef DEBUG
 WHERE short DebugLevel;
+WHERE char *DebugDir;
 WHERE char *DebugFile;
 #endif
 
