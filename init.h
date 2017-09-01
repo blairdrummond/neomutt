@@ -40,6 +40,7 @@
 #include "options.h"
 #include "protos.h"
 #include "sort.h"
+#include "config/types.h"
 #ifdef USE_LUA
 #include "mutt_lua.h"
 #endif

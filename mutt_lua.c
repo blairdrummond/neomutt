@@ -40,6 +40,7 @@
 #include "options.h"
 #include "protos.h"
 #include "rfc822.h"
+#include "config/types.h"
 
 static int _handle_panic(lua_State *l)
 {

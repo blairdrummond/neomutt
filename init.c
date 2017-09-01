@@ -67,6 +67,7 @@
 #include "rfc822.h"
 #include "sidebar.h"
 #include "version.h"
+#include "config/types.h"
 #ifdef USE_NOTMUCH
 #include "mutt_notmuch.h"
 #endif
