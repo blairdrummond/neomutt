@@ -22,7 +22,7 @@ AM_DISTCHECK_CONFIGURE_FLAGS = \
 	--with-sasl \
 	--with-tokyocabinet
 
-SUBDIRS = m4 contrib imap ncrypt lib config
+SUBDIRS = m4 contrib imap ncrypt lib config test
 
 if BUILD_HCACHE
 SUBDIRS += hcache
@@ -68,11 +68,14 @@ LIBMUTTDEPS = $(top_srcdir)/lib/lib.h lib/libmutt.a
 LIBCONFIG = -Lconfig -lconfig
 LIBCONFIGDEPS = config/libconfig.a
 
+LIBTEST = -Ltest -ltest
+LIBTESTDEPS = test/libtest.a
+
 neomutt_LDADD = $(MUTT_LIB_OBJECTS) $(LIBOBJS) $(HCACHE_LIBS) $(NCRYPT_LIBS) \
-	$(LIBIMAP) $(LIBMUTT) $(LIBCONFIG) $(LIBICONV) $(GPGME_LIBS) $(INTLLIBS)
+	$(LIBIMAP) $(LIBMUTT) $(LIBCONFIG) $(LIBTEST) $(LIBICONV) $(GPGME_LIBS) $(INTLLIBS)
 
 neomutt_DEPENDENCIES = $(MUTT_LIB_OBJECTS) $(LIBOBJS) $(LIBIMAPDEPS) \
-	$(LIBMUTTDEPS) $(LIBCONFIGDEPS) $(HCACHE_DEPS) $(NCRYPT_DEPS) $(INTLDEPS)
+	$(LIBMUTTDEPS) $(LIBCONFIGDEPS) $(LIBTESTDEPS) $(HCACHE_DEPS) $(NCRYPT_DEPS) $(INTLDEPS)
 
 DEFS=-DPKGDATADIR=\"$(pkgdatadir)\" -DSYSCONFDIR=\"$(sysconfdir)\" \
 	-DBINDIR=\"$(bindir)\" -DMUTTLOCALEDIR=\"$(datadir)/locale\"
