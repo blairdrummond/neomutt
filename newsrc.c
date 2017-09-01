@@ -114,6 +114,11 @@ void nntp_data_free(void *data)
   FREE(&data);
 }
 
+void nntp_hash_destructor(int type, void *obj, intptr_t data)
+{
+  nntp_data_free(obj);
+}
+
 /**
  * nntp_newsrc_close - Unlock and close .newsrc file
  */
@@ -1007,6 +1012,7 @@ struct NntpServer *nntp_select_server(char *server, int leave_lock)
   nserv = safe_calloc(1, sizeof(struct NntpServer));
   nserv->conn = conn;
   nserv->groups_hash = hash_create(1009, 0);
+  hash_set_destructor(nserv->groups_hash, nntp_hash_destructor, 0);
   nserv->groups_max = 16;
   nserv->groups_list = safe_malloc(nserv->groups_max * sizeof(nntp_data));
 
@@ -1109,7 +1115,7 @@ struct NntpServer *nntp_select_server(char *server, int leave_lock)
 
   if (rc < 0)
   {
-    hash_destroy(&nserv->groups_hash, nntp_data_free);
+    hash_destroy(&nserv->groups_hash);
     FREE(&nserv->groups_list);
     FREE(&nserv->newsrc_file);
     FREE(&nserv->authenticators);

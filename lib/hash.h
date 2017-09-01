@@ -4,6 +4,7 @@
  *
  * @authors
  * Copyright (C) 1996-2009 Michael R. Elkins <me@mutt.org>
+ * Copyright (C) 2017 Richard Russon <rich@flatcap.org>
  *
  * @copyright
  * This program is free software: you can redistribute it and/or modify it under
@@ -24,6 +25,7 @@
 #define _LIB_HASH_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /**
  * union HashKey - The data item stored in a HashElem
@@ -38,10 +40,13 @@ union HashKey {
  */
 struct HashElem
 {
+  int type;
   union HashKey key;
   void *data;
   struct HashElem *next;
 };
+
+typedef void (*hash_destructor)(int type, void *obj, intptr_t data);
 
 /**
  * struct Hash - A Hash Table
@@ -54,6 +59,8 @@ struct Hash
   struct HashElem **table;
   unsigned int (*gen_hash)(union HashKey, unsigned int);
   int (*cmp_key)(union HashKey, union HashKey);
+  hash_destructor destroy;
+  intptr_t dest_data;
 };
 
 /* flags for hash_create() */
@@ -63,9 +70,11 @@ struct Hash
 
 struct Hash *hash_create(int nelem, int flags);
 struct Hash *int_hash_create(int nelem, int flags);
+void hash_set_destructor(struct Hash *hash, hash_destructor fn, intptr_t fn_data);
 
-int hash_insert(struct Hash *table, const char *strkey, void *data);
-int int_hash_insert(struct Hash *table, unsigned int intkey, void *data);
+struct HashElem *hash_typed_insert(struct Hash *table, const char *strkey, int type, void *data);
+struct HashElem *hash_insert(struct Hash *table, const char *strkey, void *data);
+struct HashElem *int_hash_insert(struct Hash *table, unsigned int intkey, void *data);
 
 void *hash_find(const struct Hash *table, const char *strkey);
 struct HashElem *hash_find_elem(const struct Hash *table, const char *strkey);
@@ -73,12 +82,11 @@ void *int_hash_find(const struct Hash *table, unsigned int intkey);
 
 struct HashElem *hash_find_bucket(const struct Hash *table, const char *strkey);
 
-void hash_delete(struct Hash *table, const char *strkey, const void *data,
-                 void (*destroy)(void *));
-void int_hash_delete(struct Hash *table, unsigned int intkey, const void *data,
-                     void (*destroy)(void *));
+void hash_delete(struct Hash *table, const char *strkey, const void *data);
+void int_hash_delete(struct Hash *table, unsigned int intkey, const void *data);
+void hash_destroy(struct Hash **ptr);
 
-void hash_destroy(struct Hash **ptr, void (*destroy)(void *));
+void hash_dump(struct Hash *table);
 
 /**
  * struct HashWalkState - Cursor to iterate through a Hash Table

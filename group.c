@@ -54,7 +54,7 @@ static void group_remove(struct Group *g)
 {
   if (!g)
     return;
-  hash_delete(Groups, g->name, g, NULL);
+  hash_delete(Groups, g->name, g);
   rfc822_free_address(&g->as);
   mutt_free_regex_list(&g->rs);
   FREE(&g->name);
