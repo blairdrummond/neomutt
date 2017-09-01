@@ -3,7 +3,7 @@
 include $(top_srcdir)/flymake.am
 
 AUTOMAKE_OPTIONS = 1.6 foreign
-EXTRA_PROGRAMS = pgpewrap pgpring
+EXTRA_PROGRAMS = pgpewrap pgpring demo
 
 # Test the .tar file by building everything
 AM_DISTCHECK_CONFIGURE_FLAGS = \
@@ -40,7 +40,7 @@ distdir = $(PACKAGE)-$(VERSION)
 
 BUILT_SOURCES = conststrings.c git_ver.h
 
-bin_PROGRAMS = neomutt
+bin_PROGRAMS = neomutt demo
 
 neomutt_SOURCES = account.c addrbook.c address.h alias.c alias.h attach.c \
 	bcache.c body.c body.h browser.c buffy.c charset.c color.c \
@@ -96,13 +96,17 @@ EXTRA_DIST = account.h attach.h bcache.h browser.h buffy.h \
 	mutt_socket.h mutt_ssl.h mutt_tunnel.h mx.h myvar.h nntp.h opcodes.h pager.h \
 	pgpewrap.c pop.h protos.h queue.h README.md README.SSL remailer.c remailer.h \
 	rfc1524.h rfc2047.h rfc2231.h rfc3676.h rfc822.h sidebar.h \
-	sort.h txt2c.c txt2c.sh version.h
+	sort.h txt2c.c txt2c.sh version.h demo.c
 
 EXTRA_SCRIPTS =
 
 pgpring_SOURCES = pgppubring.c
 pgpring_LDADD = $(LIBOBJS) $(NCRYPT_LIBS) $(INTLLIBS) $(LIBMUTT)
 pgpring_DEPENDENCIES = $(LIBOBJS) $(NCRYPT_DEPS) $(INTLDEPS) $(LIBMUTTDEPS)
+
+demo_SOURCES = demo.c
+demo_LDADD = $(LIBTEST) $(LIBCONFIG) $(LIBMUTT)
+demo_DEPENDENCIES = $(LIBTESTDEPS) $(LIBCONFIGDEPS) $(LIBMUTTDEPS)
 
 txt2c_SOURCES = txt2c.c
 txt2c_LDADD =
