@@ -163,6 +163,7 @@ static struct Hash *new_hash(int nelem)
  * union_hash_insert - Insert into a hash table using a union as a key
  * @param table     Hash table to update
  * @param key       Key to hash on
+ * @param type      Data type
  * @param data      Data to associate with `key'
  * @retval -1 on error
  * @retval >=0 on success, index into the hash table
@@ -253,7 +254,6 @@ static void *union_hash_find(const struct Hash *table, union HashKey key)
  * @param table   Hash table to use
  * @param key     Key (either string or integer)
  * @param data    Private data to match (or NULL for any match)
- * @param destroy Callback function to free the HashElem's data
  */
 static void union_hash_delete(struct Hash *table, union HashKey key, const void *data)
 {
@@ -421,7 +421,6 @@ struct HashElem *hash_find_bucket(const struct Hash *table, const char *strkey)
  * @param table   Hash table to use
  * @param strkey  String key to match
  * @param data    Private data to match (or NULL for any match)
- * @param destroy Callback function to free the HashElem's data
  */
 void hash_delete(struct Hash *table, const char *strkey, const void *data)
 {
@@ -435,7 +434,6 @@ void hash_delete(struct Hash *table, const char *strkey, const void *data)
  * @param table   Hash table to use
  * @param intkey  Integer key to match
  * @param data    Private data to match (or NULL for any match)
- * @param destroy Callback function to free the HashElem's data
  */
 void int_hash_delete(struct Hash *table, unsigned int intkey, const void *data)
 {
@@ -447,7 +445,6 @@ void int_hash_delete(struct Hash *table, unsigned int intkey, const void *data)
 /**
  * hash_destroy - Destroy a hash table
  * @param ptr     Pointer to the hash table to be freed
- * @param destroy Function to call to free the ->data member (optional)
  */
 void hash_destroy(struct Hash **ptr)
 {

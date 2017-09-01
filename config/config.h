@@ -25,18 +25,18 @@
  *
  * User configurable variables.
  *
- * -# @subpage account
- * -# @subpage address
- * -# @subpage bool
- * -# @subpage magic
- * -# @subpage mbtable
- * -# @subpage number
- * -# @subpage path
- * -# @subpage quad
- * -# @subpage regex
- * -# @subpage set
- * -# @subpage sort
- * -# @subpage string
+ * -# @subpage config-account
+ * -# @subpage config-address
+ * -# @subpage config-bool
+ * -# @subpage config-magic
+ * -# @subpage config-mbtable
+ * -# @subpage config-number
+ * -# @subpage config-path
+ * -# @subpage config-quad
+ * -# @subpage config-regex
+ * -# @subpage config-set
+ * -# @subpage config-sort
+ * -# @subpage config-string
  */
 
 #ifndef _CONFIG_CONFIG_H
