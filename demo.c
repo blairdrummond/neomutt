@@ -1,5 +1,6 @@
 #include "config.h"
 #include <stdbool.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include "test/account2.h"
@@ -18,6 +19,15 @@
 #include "test/synonym.h"
 
 typedef bool (*test_fn)(void);
+
+/* stdout override */
+void mutt_debug(int level, const char *fmt, ...)
+{
+  va_list ap;
+  va_start(ap, fmt);
+  vfprintf(stdout, fmt, ap);
+  va_end(ap);
+}
 
 // clang-format off
 struct Test

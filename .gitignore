@@ -2,6 +2,7 @@
 *.o
 *.a
 *.in
+*.gc??
 tags
 
 # Ignore these files in all subdirectories
@@ -21,6 +22,8 @@ pgpewrap
 pgpring
 txt2c
 demo
+lcov
+lcov.info
 
 # ./configure
 config.h

@@ -38,6 +38,8 @@ fi
 
 if test "$CC" = "gcc"; then
 	CFLAGS="$CFLAGS -fno-delete-null-pointer-checks"
+	CFLAGS="$CFLAGS -O0 -fprofile-arcs -ftest-coverage"
+	LDFLAGS="$LDFLAGS -fprofile-arcs -ftest-coverage"
 fi
 
 CFLAGS="-Wall -pedantic $CFLAGS"
