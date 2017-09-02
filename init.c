@@ -68,6 +68,7 @@
 #include "sidebar.h"
 #include "version.h"
 #include "config/types.h"
+#include "config/sort.h"
 #ifdef USE_NOTMUCH
 #include "mutt_notmuch.h"
 #endif

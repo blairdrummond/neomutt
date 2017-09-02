@@ -38,6 +38,7 @@
 #include "protos.h"
 #include "rfc822.h"
 #include "sort.h"
+#include "config/sort.h"
 
 #define RSORT(x) (SortAlias & SORT_REVERSE) ? -x : x
 

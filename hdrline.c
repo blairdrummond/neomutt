@@ -47,6 +47,7 @@
 #include "protos.h"
 #include "rfc822.h"
 #include "sort.h"
+#include "config/sort.h"
 #include "thread.h"
 #ifdef USE_NOTMUCH
 #include "mutt_notmuch.h"

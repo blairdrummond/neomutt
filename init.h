@@ -41,6 +41,7 @@
 #include "protos.h"
 #include "sort.h"
 #include "config/types.h"
+#include "config/sort.h"
 #ifdef USE_LUA
 #include "mutt_lua.h"
 #endif

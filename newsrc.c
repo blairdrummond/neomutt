@@ -47,6 +47,7 @@
 #include "options.h"
 #include "protos.h"
 #include "sort.h"
+#include "config/sort.h"
 #include "url.h"
 #ifdef USE_HCACHE
 #include "hcache/hcache.h"

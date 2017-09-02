@@ -34,6 +34,7 @@
 #include "options.h"
 #include "protos.h"
 #include "sort.h"
+#include "config/sort.h"
 #include "thread.h"
 
 void _mutt_set_flag(struct Context *ctx, struct Header *h, int flag, int bf, int upd_ctx)

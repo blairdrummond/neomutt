@@ -26,6 +26,7 @@
 #include "lib/lib.h"
 #include "mutt.h"
 #include "sort.h"
+#include "config/sort.h"
 #include "address.h"
 #include "body.h"
 #include "context.h"

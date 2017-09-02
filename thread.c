@@ -37,6 +37,7 @@
 #include "options.h"
 #include "protos.h"
 #include "sort.h"
+#include "config/sort.h"
 
 #define VISIBLE(hdr, ctx)                                                      \
   (hdr->virtual >= 0 || (hdr->collapsed && (!ctx->pattern || hdr->limited)))

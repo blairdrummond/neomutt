@@ -57,6 +57,7 @@
 #include "protos.h"
 #include "rfc822.h"
 #include "sort.h"
+#include "config/sort.h"
 
 /**
  * struct PgpCache - List of cached PGP keys

@@ -42,6 +42,7 @@
 #include "options.h"
 #include "protos.h"
 #include "sort.h"
+#include "config/sort.h"
 #ifdef USE_NOTMUCH
 #include "mutt_notmuch.h"
 #endif

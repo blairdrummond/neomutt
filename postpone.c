@@ -48,6 +48,7 @@
 #include "parameter.h"
 #include "protos.h"
 #include "sort.h"
+#include "config/sort.h"
 #include "state.h"
 #include "thread.h"
 #ifdef USE_IMAP
