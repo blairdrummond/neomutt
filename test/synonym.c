@@ -41,7 +41,7 @@ static char *VarGuava;
 static char *VarIlama;
 
 // clang-format off
-static struct VariableDef Vars[] = {
+static struct ConfigDef Vars[] = {
   { "Apple",      DT_STRING,  &VarApple,      0,               NULL },
   { "Banana",     DT_SYNONYM, NULL,           IP "Apple",      NULL },
   { "Cherry",     DT_STRING,  &VarCherry,     IP "cherry",     NULL },
@@ -55,7 +55,7 @@ static struct VariableDef Vars[] = {
   { NULL },
 };
 
-static struct VariableDef Vars2[] = {
+static struct ConfigDef Vars2[] = {
   { "Jackfruit",  DT_SYNONYM, NULL,           IP "Broken",     NULL },
   { NULL },
 };

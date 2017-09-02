@@ -50,7 +50,7 @@ static short VarJackfruit;
 static short VarKumquat;
 
 // clang-format off
-static struct VariableDef Vars[] = {
+static struct ConfigDef Vars[] = {
   { "Apple",      DT_MAGIC, &VarApple,      1, NULL              }, /* test_initial_values() */
   { "Banana",     DT_MAGIC, &VarBanana,     3, NULL              },
   { "Cherry",     DT_MAGIC, &VarCherry,     1, NULL              }, /* test_string_set */

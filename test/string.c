@@ -52,7 +52,7 @@ static char *VarNectarine;
 static char *VarOlive;
 
 // clang-format off
-static struct VariableDef Vars[] = {
+static struct ConfigDef Vars[] = {
   { "Apple",      DT_STRING, &VarApple,      IP "apple",     NULL              }, /* test_initial_values() */
   { "Banana",     DT_STRING, &VarBanana,     IP "banana",    NULL              },
   { "Cherry",     DT_STRING, &VarCherry,     0,              NULL              }, /* test_string_set */

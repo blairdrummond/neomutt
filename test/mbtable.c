@@ -52,7 +52,7 @@ static struct MbTable *VarNectarine;
 static struct MbTable *VarOlive;
 
 // clang-format off
-static struct VariableDef Vars[] = {
+static struct ConfigDef Vars[] = {
   { "Apple",      DT_MBTABLE, &VarApple,      IP "apple",     NULL              }, /* test_initial_values() */
   { "Banana",     DT_MBTABLE, &VarBanana,     IP "banana",    NULL              },
   { "Cherry",     DT_MBTABLE, &VarCherry,     0,              NULL              }, /* test_mbtable_set */

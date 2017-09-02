@@ -56,7 +56,7 @@ static short VarPapaya;
 static short VarQuince;
 
 // clang-format off
-static struct VariableDef Vars[] = {
+static struct ConfigDef Vars[] = {
   { "Apple",      DT_SORT,                 &VarApple,       1, NULL              }, /* test_initial_values() */
   { "Banana",     DT_SORT,                 &VarBanana,      2, NULL              },
   { "Cherry",     DT_SORT|DT_SORT_INDEX,   &VarCherry,      1, NULL              }, /* test_string_set */
@@ -76,7 +76,7 @@ static struct VariableDef Vars[] = {
   { NULL },
 };
 
-static struct VariableDef Vars2[] = {
+static struct ConfigDef Vars2[] = {
   { "Quince", DT_SORT|DT_SORT_AUX|DT_SORT_ALIAS, &VarQuince, 1, NULL }, /* test_sort_type */
   { NULL },
 };

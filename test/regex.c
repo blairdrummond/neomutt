@@ -52,7 +52,7 @@ static struct Regex *VarNectarine;
 static struct Regex *VarOlive;
 
 // clang-format off
-static struct VariableDef Vars[] = {
+static struct ConfigDef Vars[] = {
   { "Apple",      DT_REGEX, &VarApple,      IP "apple.*",     NULL              }, /* test_initial_values() */
   { "Banana",     DT_REGEX, &VarBanana,     IP "banana.*",    NULL              },
   { "Cherry",     DT_REGEX, &VarCherry,     0,                NULL              }, /* test_regex_set */
