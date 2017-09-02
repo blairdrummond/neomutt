@@ -140,14 +140,14 @@ static int _lua_mutt_set(lua_State *l)
     case DT_PATH:
     case DT_SORT:
     case DT_STRING:
-      opt.data = (long) safe_strdup(lua_tostring(l, -1));
+      opt.var = (long) safe_strdup(lua_tostring(l, -1));
       rv = mutt_option_set(&opt, &err);
-      FREE(&opt.data);
+      FREE(&opt.var);
       break;
     case DT_QUAD:
-      opt.data = (long) lua_tointeger(l, -1);
-      if ((opt.data != MUTT_YES) && (opt.data != MUTT_NO) &&
-          (opt.data != MUTT_ASKYES) && (opt.data != MUTT_ASKNO))
+      opt.var = (long) lua_tointeger(l, -1);
+      if ((opt.var != MUTT_YES) && (opt.var != MUTT_NO) &&
+          (opt.var != MUTT_ASKYES) && (opt.var != MUTT_ASKNO))
       {
         luaL_error(l, "Invalid opt for quad option %s (one of "
                       "mutt.QUAD_YES, mutt.QUAD_NO, mutt.QUAD_ASKYES, "
@@ -161,7 +161,7 @@ static int _lua_mutt_set(lua_State *l)
     case DT_MAGIC:
       if (mx_set_magic(lua_tostring(l, -1)))
       {
-        luaL_error(l, "Invalid mailbox type: %s", opt.data);
+        luaL_error(l, "Invalid mailbox type: %s", opt.var);
         rv = -1;
       }
       break;
@@ -170,7 +170,7 @@ static int _lua_mutt_set(lua_State *l)
       lua_Integer i = lua_tointeger(l, -1);
       if ((i > SHRT_MIN) && (i < SHRT_MAX))
       {
-        opt.data = lua_tointeger(l, -1);
+        opt.var = lua_tointeger(l, -1);
         rv = mutt_option_set(&opt, &err);
       }
       else
@@ -181,7 +181,7 @@ static int _lua_mutt_set(lua_State *l)
       break;
     }
     case DT_BOOL:
-      opt.data = (long) lua_toboolean(l, -1);
+      opt.var = (long) lua_toboolean(l, -1);
       rv = mutt_option_set(&opt, &err);
       break;
     default:
@@ -206,13 +206,13 @@ static int _lua_mutt_get(lua_State *l)
       case DT_ADDRESS:
       {
         char value[LONG_STRING] = "";
-        rfc822_write_address(value, LONG_STRING, *((struct Address **) opt.data), 0);
+        rfc822_write_address(value, LONG_STRING, *((struct Address **) opt.var), 0);
         lua_pushstring(l, value);
         return 1;
       }
       case DT_MBTABLE:
       {
-        struct MbTable *tbl = *(struct MbTable **) opt.data;
+        struct MbTable *tbl = *(struct MbTable **) opt.var;
         lua_pushstring(l, tbl->orig_str);
         return 1;
       }
@@ -220,20 +220,20 @@ static int _lua_mutt_get(lua_State *l)
       case DT_STRING:
         if (mutt_strncmp("my_", param, 3) == 0)
         {
-          char *option = (char *) opt.option;
-          char *value = (char *) opt.data;
+          char *name = (char *) opt.name;
+          char *value = (char *) opt.var;
           lua_pushstring(l, value);
-          FREE(&option);
+          FREE(&name);
           FREE(&value);
         }
         else
         {
-          char *value = NONULL(*((char **) opt.data));
+          char *value = NONULL(*((char **) opt.var));
           lua_pushstring(l, value);
         }
         return 1;
       case DT_QUAD:
-        lua_pushinteger(l, quadoption(opt.data));
+        lua_pushinteger(l, quadoption(opt.var));
         return 1;
       case DT_REGEX:
       case DT_MAGIC:
@@ -249,10 +249,10 @@ static int _lua_mutt_get(lua_State *l)
         return 1;
       }
       case DT_NUMBER:
-        lua_pushinteger(l, (signed short) *((unsigned long *) opt.data));
+        lua_pushinteger(l, (signed short) *((unsigned long *) opt.var));
         return 1;
       case DT_BOOL:
-        lua_pushboolean(l, option(opt.data));
+        lua_pushboolean(l, option(opt.var));
         return 1;
       default:
         luaL_error(l, "NeoMutt parameter type %d unknown for %s", opt.type, param);
