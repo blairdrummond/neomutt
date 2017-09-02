@@ -45,7 +45,7 @@ struct BodyCache
   size_t pathlen;
 };
 
-static int bcache_path(struct Account *account, const char *mailbox, char *dst, size_t dstlen)
+static int bcache_path(struct Account0 *account, const char *mailbox, char *dst, size_t dstlen)
 {
   char host[STRING];
   char path[_POSIX_PATH_MAX];
@@ -104,7 +104,7 @@ static int mutt_bcache_move(struct BodyCache *bcache, const char *id, const char
   return rename(path, newpath);
 }
 
-struct BodyCache *mutt_bcache_open(struct Account *account, const char *mailbox)
+struct BodyCache *mutt_bcache_open(struct Account0 *account, const char *mailbox)
 {
   struct BodyCache *bcache = NULL;
 

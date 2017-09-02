@@ -510,7 +510,7 @@ int nntp_newsrc_update(struct NntpServer *nserv)
 /**
  * cache_expand - Make fully qualified cache file name
  */
-static void cache_expand(char *dst, size_t dstlen, struct Account *acct, char *src)
+static void cache_expand(char *dst, size_t dstlen, struct Account0 *acct, char *src)
 {
   char *c = NULL;
   char file[_POSIX_PATH_MAX];
@@ -539,7 +539,7 @@ static void cache_expand(char *dst, size_t dstlen, struct Account *acct, char *s
 /**
  * nntp_expand_path - Make fully qualified url from newsgroup name
  */
-void nntp_expand_path(char *line, size_t len, struct Account *acct)
+void nntp_expand_path(char *line, size_t len, struct Account0 *acct)
 {
   struct Url url;
 
@@ -876,7 +876,7 @@ const char *nntp_format_str(char *dest, size_t destlen, size_t col, int cols,
                             unsigned long data, enum FormatFlag flags)
 {
   struct NntpServer *nserv = (struct NntpServer *) data;
-  struct Account *acct = &nserv->conn->account;
+  struct Account0 *acct = &nserv->conn->account;
   struct Url url;
   char fn[SHORT_STRING], tmp[SHORT_STRING], *p = NULL;
 
@@ -941,7 +941,7 @@ struct NntpServer *nntp_select_server(char *server, int leave_lock)
   char *p = NULL;
 #endif
   int rc;
-  struct Account acct;
+  struct Account0 acct;
   struct NntpServer *nserv = NULL;
   struct NntpData *nntp_data = NULL;
   struct Connection *conn = NULL;

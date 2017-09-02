@@ -1,6 +1,6 @@
 /**
  * @file
- * Account object used by POP and IMAP
+ * Account0 object used by POP and IMAP
  *
  * @authors
  * Copyright (C) 2000-2007 Brendan Cully <brendan@kublai.com>
@@ -34,7 +34,7 @@
 /**
  * mutt_account_match - compare account info (host/port/user)
  */
-int mutt_account_match(const struct Account *a1, const struct Account *a2)
+int mutt_account_match(const struct Account0 *a1, const struct Account0 *a2)
 {
   const char *user = NONULL(Username);
 
@@ -80,7 +80,7 @@ int mutt_account_match(const struct Account *a1, const struct Account *a2)
 /**
  * mutt_account_fromurl - fill account with information from url
  */
-int mutt_account_fromurl(struct Account *account, struct Url *url)
+int mutt_account_fromurl(struct Account0 *account, struct Url *url)
 {
   /* must be present */
   if (url->host)
@@ -114,7 +114,7 @@ int mutt_account_fromurl(struct Account *account, struct Url *url)
  * account until you've finished with url (make a copy of account if you need
  * it for a while).
  */
-void mutt_account_tourl(struct Account *account, struct Url *url)
+void mutt_account_tourl(struct Account0 *account, struct Url *url)
 {
   url->scheme = U_UNKNOWN;
   url->user = NULL;
@@ -172,9 +172,9 @@ void mutt_account_tourl(struct Account *account, struct Url *url)
 }
 
 /**
- * mutt_account_getuser - retrieve username into Account, if necessary
+ * mutt_account_getuser - retrieve username into Account0, if necessary
  */
-int mutt_account_getuser(struct Account *account)
+int mutt_account_getuser(struct Account0 *account)
 {
   char prompt[STRING];
 
@@ -210,7 +210,7 @@ int mutt_account_getuser(struct Account *account)
   return 0;
 }
 
-int mutt_account_getlogin(struct Account *account)
+int mutt_account_getlogin(struct Account0 *account)
 {
   /* already set */
   if (account->flags & MUTT_ACCT_LOGIN)
@@ -238,9 +238,9 @@ int mutt_account_getlogin(struct Account *account)
 }
 
 /**
- * mutt_account_getpass - fetch password into Account, if necessary
+ * mutt_account_getpass - fetch password into Account0, if necessary
  */
-int mutt_account_getpass(struct Account *account)
+int mutt_account_getpass(struct Account0 *account)
 {
   char prompt[STRING];
 
@@ -279,7 +279,7 @@ int mutt_account_getpass(struct Account *account)
   return 0;
 }
 
-void mutt_account_unsetpass(struct Account *account)
+void mutt_account_unsetpass(struct Account0 *account)
 {
   account->flags &= ~MUTT_ACCT_PASS;
 }

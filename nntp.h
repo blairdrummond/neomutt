@@ -37,7 +37,7 @@
 #include "hcache/hcache.h"
 #endif
 
-struct Account;
+struct Account0;
 struct Header;
 struct Context;
 
@@ -173,7 +173,7 @@ int nntp_check_children(struct Context *ctx, const char *msgid);
 int nntp_newsrc_parse(struct NntpServer *nserv);
 void nntp_newsrc_close(struct NntpServer *nserv);
 void nntp_buffy(char *buf, size_t len);
-void nntp_expand_path(char *line, size_t len, struct Account *acct);
+void nntp_expand_path(char *line, size_t len, struct Account0 *acct);
 void nntp_clear_cache(struct NntpServer *nserv);
 const char *nntp_format_str(char *dest, size_t destlen, size_t col, int cols,
                             char op, const char *src, const char *fmt,

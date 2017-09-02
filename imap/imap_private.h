@@ -32,7 +32,7 @@
 #endif
 #include "list.h"
 
-struct Account;
+struct Account0;
 struct Buffer;
 struct Context;
 struct Header;
@@ -275,7 +275,7 @@ int imap_exec_msgset(struct ImapData *idata, const char *pre, const char *post,
                      int flag, int changed, int invert);
 int imap_open_connection(struct ImapData *idata);
 void imap_close_connection(struct ImapData *idata);
-struct ImapData *imap_conn_find(const struct Account *account, int flags);
+struct ImapData *imap_conn_find(const struct Account0 *account, int flags);
 int imap_read_literal(FILE *fp, struct ImapData *idata, long bytes, struct Progress *pbar);
 void imap_expunge_mailbox(struct ImapData *idata);
 void imap_logout(struct ImapData **idata);

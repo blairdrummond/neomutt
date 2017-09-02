@@ -278,7 +278,7 @@ static bool addresses_use_unicode(const struct Address *a)
   return false;
 }
 
-static int smtp_fill_account(struct Account *account)
+static int smtp_fill_account(struct Account0 *account)
 {
   static unsigned short SmtpPort = 0;
 
@@ -639,7 +639,7 @@ int mutt_smtp_send(const struct Address *from, const struct Address *to,
                    const char *msgfile, int eightbit)
 {
   struct Connection *conn = NULL;
-  struct Account account;
+  struct Account0 account;
   const char *envfrom = NULL;
   char buf[1024];
   int ret = -1;

@@ -422,7 +422,7 @@ static int pop_open_mailbox(struct Context *ctx)
   int ret;
   char buf[LONG_STRING];
   struct Connection *conn = NULL;
-  struct Account acct;
+  struct Account0 acct;
   struct PopData *pop_data = NULL;
   struct Url url;
 
@@ -816,7 +816,7 @@ void pop_fetch_mail(void)
   struct Connection *conn = NULL;
   struct Context ctx;
   struct Message *msg = NULL;
-  struct Account acct;
+  struct Account0 acct;
   struct PopData *pop_data = NULL;
 
   if (!PopHost)

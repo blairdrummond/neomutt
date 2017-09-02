@@ -1,6 +1,6 @@
 /**
  * @file
- * Account object used by POP and IMAP
+ * Account0 object used by POP and IMAP
  *
  * @authors
  * Copyright (C) 2000-2007,2012 Brendan Cully <brendan@kublai.com>
@@ -47,9 +47,9 @@ enum AccountType
 #define MUTT_ACCT_SSL (1 << 4)
 
 /**
- * struct Account - Login details for a remote server
+ * struct Account0 - Login details for a remote server
  */
-struct Account
+struct Account0
 {
   char user[64];
   char login[64];
@@ -60,12 +60,12 @@ struct Account
   unsigned char flags;
 };
 
-int mutt_account_match(const struct Account *a1, const struct Account *m2);
-int mutt_account_fromurl(struct Account *account, struct Url *url);
-void mutt_account_tourl(struct Account *account, struct Url *url);
-int mutt_account_getuser(struct Account *account);
-int mutt_account_getlogin(struct Account *account);
-int mutt_account_getpass(struct Account *account);
-void mutt_account_unsetpass(struct Account *account);
+int mutt_account_match(const struct Account0 *a1, const struct Account0 *m2);
+int mutt_account_fromurl(struct Account0 *account, struct Url *url);
+void mutt_account_tourl(struct Account0 *account, struct Url *url);
+int mutt_account_getuser(struct Account0 *account);
+int mutt_account_getlogin(struct Account0 *account);
+int mutt_account_getpass(struct Account0 *account);
+void mutt_account_unsetpass(struct Account0 *account);
 
 #endif /* _MUTT_ACCOUNT_H */

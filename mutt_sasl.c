@@ -173,11 +173,11 @@ static int mutt_sasl_start(void)
 }
 
 /**
- * mutt_sasl_cb_authname - callback to retrieve authname or user from Account
+ * mutt_sasl_cb_authname - callback to retrieve authname or user from Account0
  */
 static int mutt_sasl_cb_authname(void *context, int id, const char **result, unsigned *len)
 {
-  struct Account *account = (struct Account *) context;
+  struct Account0 *account = (struct Account0 *) context;
 
   if (!result)
     return SASL_FAIL;
@@ -214,7 +214,7 @@ static int mutt_sasl_cb_authname(void *context, int id, const char **result, uns
 
 static int mutt_sasl_cb_pass(sasl_conn_t *conn, void *context, int id, sasl_secret_t **psecret)
 {
-  struct Account *account = (struct Account *) context;
+  struct Account0 *account = (struct Account0 *) context;
   int len;
 
   if (!account || !psecret)
@@ -236,7 +236,7 @@ static int mutt_sasl_cb_pass(sasl_conn_t *conn, void *context, int id, sasl_secr
   return SASL_OK;
 }
 
-static sasl_callback_t *mutt_sasl_get_callbacks(struct Account *account)
+static sasl_callback_t *mutt_sasl_get_callbacks(struct Account0 *account)
 {
   sasl_callback_t *callback = NULL;
 

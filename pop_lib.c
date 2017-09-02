@@ -47,13 +47,13 @@
 /**
  * pop_parse_path - Parse a POP mailbox name
  * @param path Path to parse
- * @param acct Account to store details
+ * @param acct Account0 to store details
  * @retval 0 success
  * @retval -1 error
  *
  * Split a POP path into host, port, username and password
  */
-int pop_parse_path(const char *path, struct Account *acct)
+int pop_parse_path(const char *path, struct Account0 *acct)
 {
   struct Url url;
   char *c = NULL;

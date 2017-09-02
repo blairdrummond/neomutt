@@ -27,7 +27,7 @@
 #include <time.h>
 #include "mx.h"
 
-struct Account;
+struct Account0;
 struct Context;
 struct Progress;
 
@@ -116,7 +116,7 @@ void pop_apop_timestamp(struct PopData *pop_data, char *buf);
 
 /* pop_lib.c */
 #define pop_query(A, B, C) pop_query_d(A, B, C, NULL)
-int pop_parse_path(const char *path, struct Account *acct);
+int pop_parse_path(const char *path, struct Account0 *acct);
 int pop_connect(struct PopData *pop_data);
 int pop_open_connection(struct PopData *pop_data);
 int pop_query_d(struct PopData *pop_data, char *buf, size_t buflen, char *msg);
