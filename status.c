@@ -26,7 +26,7 @@
 #include "context.h"
 #include "format_flags.h"
 #include "globals.h"
-#include "mbtable.h"
+#include "config/mbtable.h"
 #include "mutt_curses.h"
 #include "mutt_menu.h"
 #include "mx.h"

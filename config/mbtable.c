@@ -46,7 +46,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <wchar.h>
-#include "mbtable.h"
+#include "config/mbtable.h"
 #include "lib/buffer.h"
 #include "lib/debug.h"
 #include "lib/memory.h"

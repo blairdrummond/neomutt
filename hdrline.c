@@ -39,7 +39,7 @@
 #include "format_flags.h"
 #include "globals.h"
 #include "header.h"
-#include "mbtable.h"
+#include "config/mbtable.h"
 #include "mutt_curses.h"
 #include "mutt_idna.h"
 #include "ncrypt/ncrypt.h"
