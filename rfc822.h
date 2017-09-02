@@ -26,8 +26,8 @@
 
 #include <stddef.h>
 #include <stdbool.h>
-#include "address.h"
 #include "lib/lib.h"
+#include "config/lib.h"
 
 /**
  * enum AddressError - possible values for RFC822Error

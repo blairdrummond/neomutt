@@ -26,7 +26,7 @@
 #include <string.h>
 #include "lib/lib.h"
 #include "mutt_idna.h"
-#include "address.h"
+#include "config/lib.h"
 #include "charset.h"
 #include "envelope.h"
 #include "globals.h"

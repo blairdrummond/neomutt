@@ -45,7 +45,7 @@
 #include <unistd.h>
 #include "lib/lib.h"
 #include "mutt.h"
-#include "address.h"
+#include "pgp.h"
 #include "body.h"
 #include "charset.h"
 #include "crypt.h"
@@ -53,6 +53,7 @@
 #include "filter.h"
 #include "globals.h"
 #include "header.h"
+#include "config/lib.h"
 #include "list.h"
 #include "mime.h"
 #include "mutt_curses.h"

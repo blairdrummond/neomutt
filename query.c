@@ -32,7 +32,7 @@
 #include <sys/types.h>
 #include "lib/lib.h"
 #include "mutt.h"
-#include "address.h"
+#include "config/lib.h"
 #include "alias.h"
 #include "envelope.h"
 #include "filter.h"

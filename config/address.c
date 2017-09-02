@@ -43,7 +43,7 @@
 #include <stddef.h>
 #include <limits.h>
 #include <stdint.h>
-#include "address.h"
+#include "config/lib.h"
 #include "lib/buffer.h"
 #include "lib/debug.h"
 #include "lib/memory.h"

@@ -34,7 +34,8 @@
 #include <time.h>
 #include "lib/lib.h"
 #include "mutt.h"
-#include "address.h"
+#include "smime.h"
+#include "config/lib.h"
 #include "alias.h"
 #include "body.h"
 #include "copy.h"

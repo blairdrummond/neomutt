@@ -34,7 +34,6 @@
 #include <time.h>
 #include "lib/lib.h"
 #include "mutt.h"
-#include "address.h"
 #include "alias.h"
 #include "body.h"
 #include "content.h"
@@ -44,6 +43,7 @@
 #include "envelope.h"
 #include "globals.h"
 #include "header.h"
+#include "config/lib.h"
 #include "mime.h"
 #include "mutt_curses.h"
 #include "ncrypt.h"

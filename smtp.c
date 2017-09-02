@@ -34,7 +34,7 @@
 #include "lib/lib.h"
 #include "mutt.h"
 #include "account.h"
-#include "address.h"
+#include "config/lib.h"
 #include "globals.h"
 #include "mutt_curses.h"
 #include "mutt_socket.h"

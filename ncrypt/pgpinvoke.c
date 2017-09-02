@@ -30,11 +30,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include "lib/lib.h"
-#include "address.h"
 #include "filter.h"
 #include "format_flags.h"
 #include "globals.h"
+#include "lib/lib.h"
+#include "config/lib.h"
 #include "list.h"
 #include "mutt_curses.h"
 #include "mutt_idna.h"

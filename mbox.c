@@ -34,7 +34,7 @@
 #include <utime.h>
 #include "lib/lib.h"
 #include "mutt.h"
-#include "address.h"
+#include "config/lib.h"
 #include "body.h"
 #include "buffy.h"
 #include "context.h"

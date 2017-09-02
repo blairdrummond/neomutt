@@ -28,6 +28,7 @@
 #include "list.h"
 #include "where.h"
 #include "mutt_regex.h"
+#include "config/address.h"
 
 #ifdef MAIN_C
 /* so that global vars get included */

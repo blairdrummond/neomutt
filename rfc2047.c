@@ -28,7 +28,7 @@
 #include <string.h>
 #include "lib/lib.h"
 #include "rfc2047.h"
-#include "address.h"
+#include "config/lib.h"
 #include "charset.h"
 #include "globals.h"
 #include "mbyte.h"

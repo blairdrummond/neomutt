@@ -24,13 +24,13 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "lib/lib.h"
-#include "mutt.h"
-#include "address.h"
 #include "alias.h"
 #include "format_flags.h"
 #include "globals.h"
 #include "keymap.h"
+#include "lib/lib.h"
+#include "config/lib.h"
+#include "mutt.h"
 #include "mutt_curses.h"
 #include "mutt_menu.h"
 #include "opcodes.h"

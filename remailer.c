@@ -33,7 +33,7 @@
 #include "lib/lib.h"
 #include "mutt.h"
 #include "remailer.h"
-#include "address.h"
+#include "config/lib.h"
 #include "envelope.h"
 #include "filter.h"
 #include "format_flags.h"

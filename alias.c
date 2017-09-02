@@ -34,8 +34,8 @@
 #include <wctype.h>
 #include "lib/lib.h"
 #include "mutt.h"
-#include "address.h"
 #include "alias.h"
+#include "config/lib.h"
 #include "charset.h"
 #include "envelope.h"
 #include "globals.h"

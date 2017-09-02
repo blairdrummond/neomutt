@@ -40,7 +40,8 @@
 #include <wctype.h>
 #include "lib/lib.h"
 #include "mutt.h"
-#include "address.h"
+#include "pattern.h"
+#include "config/lib.h"
 #include "body.h"
 #include "context.h"
 #include "copy.h"

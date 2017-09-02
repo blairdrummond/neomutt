@@ -35,7 +35,7 @@
 #include "lib/lib.h"
 #include "mutt.h"
 #include "pgpkey.h"
-#include "address.h"
+#include "config/lib.h"
 #include "body.h"
 #include "crypt.h"
 #include "filter.h"

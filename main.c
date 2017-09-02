@@ -39,7 +39,7 @@
 #include <unistd.h>
 #include "lib/lib.h"
 #include "mutt.h"
-#include "address.h"
+#include "config/lib.h"
 #include "alias.h"
 #include "body.h"
 #include "buffy.h"

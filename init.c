@@ -40,7 +40,7 @@
 #include "lib/lib.h"
 #include "mutt.h"
 #include "init.h"
-#include "address.h"
+#include "config/lib.h"
 #include "alias.h"
 #include "charset.h"
 #include "context.h"
