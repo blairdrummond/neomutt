@@ -75,6 +75,7 @@ struct ConfigDef
 {
   const char   *name;
   unsigned int  type;
+  short flags;
   void         *var;
   intptr_t      initial;
   cs_validator  validator;
