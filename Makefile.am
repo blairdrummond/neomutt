@@ -160,4 +160,32 @@ distclean-local:
 html:
 	doxygen doxygen/doxygen.conf
 
-.PHONY: html
+configtest:
+	-./demo set     > test/set.txt
+	-./demo account > test/account.txt
+	-./demo initial > test/initial.txt
+	-./demo synonym > test/synonym.txt
+	-./demo address > test/address.txt
+	-./demo bool    > test/bool.txt
+	-./demo magic   > test/magic.txt
+	-./demo mbtable > test/mbtable.txt
+	-./demo number  > test/number.txt
+	-./demo path    > test/path.txt
+	-./demo quad    > test/quad.txt
+	-./demo regex   > test/regex.txt
+	-./demo sort    > test/sort.txt
+	-./demo string  > test/string.txt
+
+lcov:
+	$(RM) -fr lcov
+	lcov -t "mutt" -o lcov.info -c -d .
+	genhtml -o lcov lcov.info
+	realpath lcov/index-sort-l.html
+
+cleanish:
+	rm -fr .build-aux/ .deps/
+	git clean -xdf */
+	find . \( -name '*.o' -o -name '*.gc??' \) -print -delete
+	rm -f ABOUT-NLS Makefile Makefile.in aclocal.m4 config.h config.h.in config.log config.status configure conststrings.c git_ver.h pgpewrap pgpring stamp-h1 txt2c
+
+.PHONY: html configtest lcov
