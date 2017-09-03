@@ -125,7 +125,7 @@ static struct Address *expand_aliases_r(struct Address *a, struct ListHead *expn
     last->next = NULL;
   }
 
-  if (option(OPT_USE_DOMAIN) && (fqdn = mutt_fqdn(1)))
+  if (OPT_USE_DOMAIN && (fqdn = mutt_fqdn(1)))
   {
     /* now qualify all local addresses */
     rfc822_qualify(head, fqdn);

@@ -31,6 +31,7 @@
 #include "charset.h"
 #include "globals.h"
 #include "protos.h"
+#include "options.h"
 
 /* This history ring grows from 0..History, with last marking the
  * where new entries go:
@@ -199,7 +200,7 @@ static void shrink_histfile(void)
   if ((f = fopen(HistoryFile, "r")) == NULL)
     return;
 
-  if (option(OPT_HISTORY_REMOVE_DUPS))
+  if (OPT_HISTORY_REMOVE_DUPS)
     for (hclass = 0; hclass < HC_LAST; hclass++)
       dup_hashes[hclass] = hash_create(MAX(10, SaveHistory * 2), MUTT_HASH_STRDUP_KEYS);
 
@@ -216,8 +217,7 @@ static void shrink_histfile(void)
     if (hclass >= HC_LAST)
       continue;
     *p = '\0';
-    if (option(OPT_HISTORY_REMOVE_DUPS) &&
-        (dup_hash_inc(dup_hashes[hclass], linebuf + read) > 1))
+    if (OPT_HISTORY_REMOVE_DUPS && (dup_hash_inc(dup_hashes[hclass], linebuf + read) > 1))
     {
       regen_file = true;
       continue;
@@ -254,7 +254,7 @@ static void shrink_histfile(void)
       if (hclass >= HC_LAST)
         continue;
       *p = '\0';
-      if (option(OPT_HISTORY_REMOVE_DUPS) &&
+      if (OPT_HISTORY_REMOVE_DUPS &&
           (dup_hash_dec(dup_hashes[hclass], linebuf + read) > 0))
         continue;
       *p = '|';
@@ -277,7 +277,7 @@ cleanup:
     safe_fclose(&tmp);
     unlink(tmpfname);
   }
-  if (option(OPT_HISTORY_REMOVE_DUPS))
+  if (OPT_HISTORY_REMOVE_DUPS)
     for (hclass = 0; hclass < HC_LAST; hclass++)
       hash_destroy(&dup_hashes[hclass]);
 }
@@ -402,7 +402,7 @@ void mutt_history_add(enum HistoryClass hclass, const char *s, bool save)
      */
     if (*s != ' ' && (!h->hist[prev] || (mutt_strcmp(h->hist[prev], s) != 0)))
     {
-      if (option(OPT_HISTORY_REMOVE_DUPS))
+      if (OPT_HISTORY_REMOVE_DUPS)
         remove_history_dups(hclass, s);
       if (save && SaveHistory)
         save_history(hclass, s);

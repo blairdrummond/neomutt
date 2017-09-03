@@ -34,15 +34,16 @@
 #include <stddef.h>
 #include <depot.h>
 #include <villa.h>
-#include "lib/lib.h"
 #include "backend.h"
+#include "lib/lib.h"
+#include "globals.h"
 #include "options.h"
 
 static void *hcache_qdbm_open(const char *path)
 {
   int flags = VL_OWRITER | VL_OCREAT;
 
-  if (option(OPT_HEADER_CACHE_COMPRESS))
+  if (OPT_HEADER_CACHE_COMPRESS)
     flags |= VL_OZCOMP;
 
   return vlopen(path, flags, VL_CMPLEX);

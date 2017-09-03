@@ -792,7 +792,7 @@ void mutt_save_path(char *d, size_t dsize, struct Address *a)
   if (a && a->mailbox)
   {
     strfcpy(d, a->mailbox, dsize);
-    if (!option(OPT_SAVE_ADDRESS))
+    if (!OPT_SAVE_ADDRESS)
     {
       char *p = NULL;
 
@@ -941,7 +941,7 @@ void mutt_expando_format(char *dest, size_t destlen, size_t col, int cols,
 
   prefix[0] = '\0';
   destlen--; /* save room for the terminal \0 */
-  wlen = ((flags & MUTT_FORMAT_ARROWCURSOR) && option(OPT_ARROW_CURSOR)) ? 3 : 0;
+  wlen = ((flags & MUTT_FORMAT_ARROWCURSOR) && OPT_ARROW_CURSOR) ? 3 : 0;
   col += wlen;
 
   if ((flags & MUTT_FORMAT_NOFILTER) == 0)
@@ -1012,7 +1012,7 @@ void mutt_expando_format(char *dest, size_t destlen, size_t col, int cols,
 
       col -= wlen; /* reset to passed in value */
       wptr = dest; /* reset write ptr */
-      wlen = ((flags & MUTT_FORMAT_ARROWCURSOR) && option(OPT_ARROW_CURSOR)) ? 3 : 0;
+      wlen = ((flags & MUTT_FORMAT_ARROWCURSOR) && OPT_ARROW_CURSOR) ? 3 : 0;
       if ((pid = mutt_create_filter(command->data, NULL, &filter, NULL)) != -1)
       {
         int rc;
@@ -1283,7 +1283,7 @@ void mutt_expando_format(char *dest, size_t destlen, size_t col, int cols,
           else if (soft && pad < 0)
           {
             int offset =
-                ((flags & MUTT_FORMAT_ARROWCURSOR) && option(OPT_ARROW_CURSOR)) ? 3 : 0;
+                ((flags & MUTT_FORMAT_ARROWCURSOR) && OPT_ARROW_CURSOR) ? 3 : 0;
             int avail_cols = (cols > offset) ? (cols - offset) : 0;
             /* \0-terminate dest for length computation in mutt_wstr_trunc() */
             *wptr = 0;
@@ -1493,7 +1493,7 @@ int mutt_save_confirm(const char *s, struct stat *st)
 
   if (magic > 0 && !mx_access(s, W_OK))
   {
-    if (option(OPT_CONFIRMAPPEND))
+    if (OPT_CONFIRMAPPEND)
     {
       snprintf(tmp, sizeof(tmp), _("Append messages to %s?"), s);
       if ((rc = mutt_yesorno(tmp, MUTT_YES)) == MUTT_NO)
@@ -1527,7 +1527,7 @@ int mutt_save_confirm(const char *s, struct stat *st)
     /* pathname does not exist */
     if (errno == ENOENT)
     {
-      if (option(OPT_CONFIRMCREATE))
+      if (OPT_CONFIRMCREATE)
       {
         snprintf(tmp, sizeof(tmp), _("Create %s?"), s);
         if ((rc = mutt_yesorno(tmp, MUTT_YES)) == MUTT_NO)

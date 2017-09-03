@@ -921,10 +921,10 @@ int imap_wait_keepalive(pid_t pid)
   sigset_t oldmask;
   int rc;
 
-  short imap_passive = option(OPT_IMAP_PASSIVE);
+  short imap_passive = OPT_IMAP_PASSIVE;
 
-  set_option(OPT_IMAP_PASSIVE);
-  set_option(OPT_KEEP_QUIET);
+  OPT_IMAP_PASSIVE = true;
+  OPT_KEEP_QUIET = true;
 
   sigprocmask(SIG_SETMASK, NULL, &oldmask);
 
@@ -951,9 +951,9 @@ int imap_wait_keepalive(pid_t pid)
   sigaction(SIGALRM, &oldalrm, NULL);
   sigprocmask(SIG_SETMASK, &oldmask, NULL);
 
-  unset_option(OPT_KEEP_QUIET);
+  OPT_KEEP_QUIET = false;
   if (!imap_passive)
-    unset_option(OPT_IMAP_PASSIVE);
+    OPT_IMAP_PASSIVE = false;
 
   return rc;
 }

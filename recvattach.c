@@ -527,7 +527,7 @@ void mutt_save_attachment_list(struct AttachCtx *actx, FILE *fp, bool tag,
     }
     if (!tag || top->tagged)
     {
-      if (!option(OPT_ATTACH_SPLIT))
+      if (!OPT_ATTACH_SPLIT)
       {
         if (!buf[0])
         {
@@ -588,7 +588,7 @@ void mutt_save_attachment_list(struct AttachCtx *actx, FILE *fp, bool tag,
     menu->redraw |= REDRAW_MOTION;
   }
 
-  if (!option(OPT_ATTACH_SPLIT) && (rc == 0))
+  if (!OPT_ATTACH_SPLIT && (rc == 0))
     mutt_message(_("Attachment saved."));
 }
 
@@ -667,7 +667,7 @@ static void pipe_attachment_list(char *command, struct AttachCtx *actx, FILE *fp
     }
     if (!tag || top->tagged)
     {
-      if (!filter && !option(OPT_ATTACH_SPLIT))
+      if (!filter && !OPT_ATTACH_SPLIT)
         pipe_attachment(fp, top, state);
       else
         query_pipe_attachment(command, fp, top, filter);
@@ -699,13 +699,13 @@ void mutt_pipe_attachment_list(struct AttachCtx *actx, FILE *fp, bool tag,
 
   mutt_expand_path(buf, sizeof(buf));
 
-  if (!filter && !option(OPT_ATTACH_SPLIT))
+  if (!filter && !OPT_ATTACH_SPLIT)
   {
     mutt_endwin(NULL);
     thepid = mutt_create_filter(buf, &state.fpout, NULL, NULL);
     pipe_attachment_list(buf, actx, fp, tag, top, filter, &state);
     safe_fclose(&state.fpout);
-    if (mutt_wait_filter(thepid) != 0 || option(OPT_WAIT_KEY))
+    if (mutt_wait_filter(thepid) != 0 || OPT_WAIT_KEY)
       mutt_any_key_to_continue(NULL);
   }
   else
@@ -757,7 +757,7 @@ static void print_attachment_list(struct AttachCtx *actx, FILE *fp, bool tag,
     if (!tag || top->tagged)
     {
       snprintf(type, sizeof(type), "%s/%s", TYPE(top), top->subtype);
-      if (!option(OPT_ATTACH_SPLIT) && !rfc1524_mailcap_lookup(top, type, NULL, MUTT_PRINT))
+      if (!OPT_ATTACH_SPLIT && !rfc1524_mailcap_lookup(top, type, NULL, MUTT_PRINT))
       {
         if ((mutt_strcasecmp("text/plain", top->subtype) == 0) ||
             (mutt_strcasecmp("application/postscript", top->subtype) == 0))
@@ -801,7 +801,7 @@ void mutt_print_attachment_list(struct AttachCtx *actx, FILE *fp, bool tag, stru
                              _("Print attachment?")) != MUTT_YES)
     return;
 
-  if (!option(OPT_ATTACH_SPLIT))
+  if (!OPT_ATTACH_SPLIT)
   {
     if (!can_print(actx, top, tag))
       return;
@@ -810,7 +810,7 @@ void mutt_print_attachment_list(struct AttachCtx *actx, FILE *fp, bool tag, stru
     thepid = mutt_create_filter(NONULL(PrintCommand), &state.fpout, NULL, NULL);
     print_attachment_list(actx, fp, tag, top, &state);
     safe_fclose(&state.fpout);
-    if (mutt_wait_filter(thepid) != 0 || option(OPT_WAIT_KEY))
+    if (mutt_wait_filter(thepid) != 0 || OPT_WAIT_KEY)
       mutt_any_key_to_continue(NULL);
   }
   else
@@ -877,7 +877,7 @@ int mutt_attach_display_loop(struct Menu *menu, int op, struct Header *hdr,
     switch (op)
     {
       case OP_DISPLAY_HEADERS:
-        toggle_option(OPT_WEED);
+        OPT_WEED = !OPT_WEED;
       /* fall through */
 
       case OP_VIEW_ATTACH:
@@ -1044,7 +1044,7 @@ void mutt_attach_init(struct AttachCtx *actx)
   for (i = 0; i < actx->idxlen; i++)
   {
     actx->idx[i]->content->tagged = 0;
-    if (option(OPT_DIGEST_COLLAPSE) && actx->idx[i]->content->type == TYPEMULTIPART &&
+    if (OPT_DIGEST_COLLAPSE && actx->idx[i]->content->type == TYPEMULTIPART &&
         !mutt_strcasecmp(actx->idx[i]->content->subtype, "digest"))
       actx->idx[i]->content->collapsed = 1;
     else
@@ -1086,7 +1086,7 @@ static void attach_collapse(struct AttachCtx *actx, struct Menu *menu)
 
   while ((rindex < actx->idxlen) && (actx->idx[rindex]->level > curlevel))
   {
-    if (option(OPT_DIGEST_COLLAPSE) && actx->idx[rindex]->content->type == TYPEMULTIPART &&
+    if (OPT_DIGEST_COLLAPSE && actx->idx[rindex]->content->type == TYPEMULTIPART &&
         !mutt_strcasecmp(actx->idx[rindex]->content->subtype, "digest"))
       actx->idx[rindex]->content->collapsed = true;
     else
@@ -1099,7 +1099,7 @@ static const char *Function_not_permitted =
     N_("Function not permitted in attach-message mode.");
 
 #define CHECK_ATTACH                                                           \
-  if (option(OPT_ATTACH_MSG))                                                  \
+  if (OPT_ATTACH_MSG)                                                  \
   {                                                                            \
     mutt_flushinp();                                                           \
     mutt_error(_(Function_not_permitted));                                     \
@@ -1205,7 +1205,7 @@ void mutt_view_attachments(struct Header *hdr)
         mutt_save_attachment_list(actx, CURATTACH->fp, menu->tagprefix,
                                   CURATTACH->content, hdr, menu);
 
-        if (!menu->tagprefix && option(OPT_RESOLVE) && menu->current < menu->max - 1)
+        if (!menu->tagprefix && OPT_RESOLVE && menu->current < menu->max - 1)
           menu->current++;
 
         menu->redraw = REDRAW_MOTION_RESYNCH | REDRAW_FULL;
@@ -1248,7 +1248,7 @@ void mutt_view_attachments(struct Header *hdr)
           if (CURATTACH->parent_type == TYPEMULTIPART)
           {
             CURATTACH->content->deleted = true;
-            if (option(OPT_RESOLVE) && menu->current < menu->max - 1)
+            if (OPT_RESOLVE && menu->current < menu->max - 1)
             {
               menu->current++;
               menu->redraw = REDRAW_MOTION_RESYNCH;
@@ -1286,7 +1286,7 @@ void mutt_view_attachments(struct Header *hdr)
         if (!menu->tagprefix)
         {
           CURATTACH->content->deleted = false;
-          if (option(OPT_RESOLVE) && menu->current < menu->max - 1)
+          if (OPT_RESOLVE && menu->current < menu->max - 1)
           {
             menu->current++;
             menu->redraw = REDRAW_MOTION_RESYNCH;

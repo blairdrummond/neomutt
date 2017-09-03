@@ -109,7 +109,7 @@ static char *intl_to_local(char *orig_user, char *orig_domain, int flags)
 
 #ifdef HAVE_LIBIDN
   is_idn_encoded = check_idn(local_domain);
-  if (is_idn_encoded && option(OPT_IDN_DECODE))
+  if (is_idn_encoded && OPT_IDN_DECODE)
   {
     if (idna_to_unicode_8z8z(local_domain, &tmp, IDNA_ALLOW_UNASSIGNED) != IDNA_SUCCESS)
       goto cleanup;
@@ -164,7 +164,7 @@ static char *intl_to_local(char *orig_user, char *orig_domain, int flags)
      * produce a non-matching domain!  Thus we only want to do the
      * idna_to_ascii_8z() if the original domain was IDNA encoded.
      */
-    if (is_idn_encoded && option(OPT_IDN_DECODE))
+    if (is_idn_encoded && OPT_IDN_DECODE)
     {
       if (idna_to_ascii_8z(reversed_domain, &tmp, IDNA_ALLOW_UNASSIGNED) != IDNA_SUCCESS)
       {
@@ -216,7 +216,7 @@ static char *local_to_intl(char *user, char *domain)
     goto cleanup;
 
 #ifdef HAVE_LIBIDN
-  if (option(OPT_IDN_ENCODE))
+  if (OPT_IDN_ENCODE)
   {
     if (idna_to_ascii_8z(intl_domain, &tmp, IDNA_ALLOW_UNASSIGNED) != IDNA_SUCCESS)
       goto cleanup;

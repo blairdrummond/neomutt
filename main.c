@@ -241,9 +241,6 @@ int main(int argc, char **argv, char **env)
   (void) mutt_rand32();
   umask(077);
 
-  memset(Options, 0, sizeof(Options));
-  memset(QuadOptions, 0, sizeof(QuadOptions));
-
   /* Init envlist */
   {
     char **srcp, **dstp;
@@ -449,7 +446,7 @@ int main(int argc, char **argv, char **env)
   if (!isatty(0) || !STAILQ_EMPTY(&queries) || !STAILQ_EMPTY(&alias_queries) ||
       dump_variables || batch_mode)
   {
-    set_option(OPT_NO_CURSES);
+    OPT_NO_CURSES = true;
     sendflags = SENDBATCH;
   }
 
@@ -459,7 +456,7 @@ int main(int argc, char **argv, char **env)
 
   /* This must come before mutt_init() because curses needs to be started
      before calling the init_pair() function to set the color scheme.  */
-  if (!option(OPT_NO_CURSES))
+  if (!OPT_NO_CURSES)
   {
     start_curses();
 
@@ -511,7 +508,7 @@ int main(int argc, char **argv, char **env)
     return rv;
   }
 
-  if (!option(OPT_NO_CURSES))
+  if (!OPT_NO_CURSES)
   {
     SETCOLOR(MT_COLOR_NORMAL);
     clear();
@@ -520,7 +517,7 @@ int main(int argc, char **argv, char **env)
   }
 
   /* Create the Folder directory if it doesn't exist. */
-  if (!option(OPT_NO_CURSES) && Folder)
+  if (!OPT_NO_CURSES && Folder)
   {
     struct stat sb;
     char fpath[_POSIX_PATH_MAX];
@@ -552,7 +549,7 @@ int main(int argc, char **argv, char **env)
 
   if (sendflags & SENDPOSTPONED)
   {
-    if (!option(OPT_NO_CURSES))
+    if (!OPT_NO_CURSES)
       mutt_flushinp();
     ci_send_message(SENDPOSTPONED, NULL, NULL, NULL, NULL);
     mutt_free_windows();
@@ -569,7 +566,7 @@ int main(int argc, char **argv, char **env)
     int rv = 0;
     char expanded_infile[_POSIX_PATH_MAX];
 
-    if (!option(OPT_NO_CURSES))
+    if (!OPT_NO_CURSES)
       mutt_flushinp();
 
     if (!msg)
@@ -583,7 +580,7 @@ int main(int argc, char **argv, char **env)
       {
         if (url_parse_mailto(msg->env, &bodytext, argv[i]) < 0)
         {
-          if (!option(OPT_NO_CURSES))
+          if (!OPT_NO_CURSES)
             mutt_endwin(NULL);
           fputs(_("Failed to parse mailto: link\n"), stderr);
           exit(1);
@@ -593,9 +590,9 @@ int main(int argc, char **argv, char **env)
         msg->env->to = rfc822_parse_adrlist(msg->env->to, argv[i]);
     }
 
-    if (!draftFile && option(OPT_AUTOEDIT) && !msg->env->to && !msg->env->cc)
+    if (!draftFile && OPT_AUTOEDIT && !msg->env->to && !msg->env->cc)
     {
-      if (!option(OPT_NO_CURSES))
+      if (!OPT_NO_CURSES)
         mutt_endwin(NULL);
       fputs(_("No recipients specified.\n"), stderr);
       exit(1);
@@ -634,7 +631,7 @@ int main(int argc, char **argv, char **env)
           mutt_expand_path(expanded_infile, sizeof(expanded_infile));
           if ((fin = fopen(expanded_infile, "r")) == NULL)
           {
-            if (!option(OPT_NO_CURSES))
+            if (!OPT_NO_CURSES)
               mutt_endwin(NULL);
             perror(expanded_infile);
             exit(1);
@@ -653,7 +650,7 @@ int main(int argc, char **argv, char **env)
 
         if ((fout = safe_fopen(tempfile, "w")) == NULL)
         {
-          if (!option(OPT_NO_CURSES))
+          if (!OPT_NO_CURSES)
             mutt_endwin(NULL);
           perror(tempfile);
           safe_fclose(&fin);
@@ -672,7 +669,7 @@ int main(int argc, char **argv, char **env)
 
         if ((fin = fopen(tempfile, "r")) == NULL)
         {
-          if (!option(OPT_NO_CURSES))
+          if (!OPT_NO_CURSES)
             mutt_endwin(NULL);
           perror(tempfile);
           FREE(&tempfile);
@@ -718,8 +715,8 @@ int main(int argc, char **argv, char **env)
         {
           if (mutt_strncasecmp("X-Mutt-Resume-Draft:", np->data, 20) == 0)
           {
-            if (option(OPT_RESUME_EDITED_DRAFT_FILES))
-              set_option(OPT_RESUME_DRAFT_FILES);
+            if (OPT_RESUME_EDITED_DRAFT_FILES)
+              OPT_RESUME_DRAFT_FILES = true;
 
             STAILQ_REMOVE(&msg->env->userhdrs, np, ListNode, entries);
             FREE(&np->data);
@@ -771,7 +768,7 @@ int main(int argc, char **argv, char **env)
           msg->content = a = mutt_make_file_attach(np->data);
         if (!a)
         {
-          if (!option(OPT_NO_CURSES))
+          if (!OPT_NO_CURSES)
             mutt_endwin(NULL);
           fprintf(stderr, _("%s: unable to attach file.\n"), np->data);
           mutt_list_free(&attach);
@@ -791,14 +788,14 @@ int main(int argc, char **argv, char **env)
       {
         if (truncate(expanded_infile, 0) == -1)
         {
-          if (!option(OPT_NO_CURSES))
+          if (!OPT_NO_CURSES)
             mutt_endwin(NULL);
           perror(expanded_infile);
           exit(1);
         }
         if ((fout = safe_fopen(expanded_infile, "a")) == NULL)
         {
-          if (!option(OPT_NO_CURSES))
+          if (!OPT_NO_CURSES)
             mutt_endwin(NULL);
           perror(expanded_infile);
           exit(1);
@@ -817,12 +814,12 @@ int main(int argc, char **argv, char **env)
         }
 
         mutt_write_rfc822_header(fout, msg->env, msg->content, -1, 0);
-        if (option(OPT_RESUME_EDITED_DRAFT_FILES))
+        if (OPT_RESUME_EDITED_DRAFT_FILES)
           fprintf(fout, "X-Mutt-Resume-Draft: 1\n");
         fputc('\n', fout);
         if ((mutt_write_mime_body(msg->content, fout) == -1))
         {
-          if (!option(OPT_NO_CURSES))
+          if (!OPT_NO_CURSES)
             mutt_endwin(NULL);
           safe_fclose(&fout);
           exit(1);
@@ -841,7 +838,7 @@ int main(int argc, char **argv, char **env)
     }
 
     mutt_free_windows();
-    if (!option(OPT_NO_CURSES))
+    if (!OPT_NO_CURSES)
       mutt_endwin(NULL);
 
     if (rv)
@@ -864,7 +861,7 @@ int main(int argc, char **argv, char **env)
 #ifdef USE_NNTP
       if (flags & MUTT_NEWS)
       {
-        set_option(OPT_NEWS);
+        OPT_NEWS = true;
         if (!(CurrentNewsSrv = nntp_select_server(NewsServer, 0)))
         {
           mutt_endwin(ErrorBuf);
@@ -897,9 +894,9 @@ int main(int argc, char **argv, char **env)
     }
 
 #ifdef USE_NNTP
-    if (option(OPT_NEWS))
+    if (OPT_NEWS)
     {
-      unset_option(OPT_NEWS);
+      OPT_NEWS = false;
       nntp_expand_path(folder, sizeof(folder), &CurrentNewsSrv->conn->account);
     }
     else
@@ -927,7 +924,7 @@ int main(int argc, char **argv, char **env)
     mutt_startup_shutdown_hook(MUTT_STARTUPHOOK);
 
     if ((Context = mx_open_mailbox(
-             folder, ((flags & MUTT_RO) || option(OPT_READ_ONLY)) ? MUTT_READONLY : 0, NULL)) ||
+             folder, ((flags & MUTT_RO) || OPT_READ_ONLY) ? MUTT_READONLY : 0, NULL)) ||
         !explicit_folder)
     {
 #ifdef USE_SIDEBAR

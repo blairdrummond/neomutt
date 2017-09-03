@@ -138,12 +138,12 @@ static char **nm_tags;
 
 extern char **envlist;
 
-static void toggle_quadoption(int opt)
+static int toggle_quadoption(int opt)
 {
-  int n = opt / 4;
-  int b = (opt % 4) * 2;
-
-  QuadOptions[n] ^= (1 << b);
+  /* toggle the low bit
+   * MUTT_NO    <--> MUTT_YES
+   * MUTT_ASKNO <--> MUTT_ASKYES */
+  return opt ^= 1;
 }
 
 static int parse_regex(int idx, struct Buffer *tmp, struct Buffer *err)
@@ -196,37 +196,18 @@ static int parse_regex(int idx, struct Buffer *tmp, struct Buffer *err)
   return 0;
 }
 
-void set_quadoption(int opt, int flag)
-{
-  int n = opt / 4;
-  int b = (opt % 4) * 2;
-
-  QuadOptions[n] &= ~(0x3 << b);
-  QuadOptions[n] |= (flag & 0x3) << b;
-}
-
-int quadoption(int opt)
-{
-  int n = opt / 4;
-  int b = (opt % 4) * 2;
-
-  return (QuadOptions[n] >> b) & 0x3;
-}
-
 int query_quadoption(int opt, const char *prompt)
 {
-  int v = quadoption(opt);
-
-  switch (v)
+  switch (opt)
   {
     case MUTT_YES:
     case MUTT_NO:
-      return v;
+      return opt;
 
     default:
-      v = mutt_yesorno(prompt, (v == MUTT_ASKYES));
+      opt = mutt_yesorno(prompt, (opt == MUTT_ASKYES));
       mutt_window_clearline(MuttMessageWindow, 0);
-      return v;
+      return opt;
   }
 
   /* not reached */
@@ -481,20 +462,20 @@ int mutt_option_set(const struct Option *val, struct Buffer *err)
         /* MuttVars[idx].data is already 'char**' (or some 'void**') or...
           * so cast to 'void*' is okay */
         FREE((void *) MuttVars[idx].var);
-        *((char **) MuttVars[idx].var) = safe_strdup((char *) val->var);
+        *((char **) MuttVars[idx].var) = safe_strdup(*(char **) val->var);
       }
       break;
       case DT_BOOL:
         if (val->var)
-          set_option(MuttVars[idx].var);
+          *(bool*)MuttVars[idx].var = true;
         else
-          unset_option(MuttVars[idx].var);
+          *(bool*)MuttVars[idx].var = false;
         break;
       case DT_QUAD:
-        set_quadoption(MuttVars[idx].var, val->var);
+        *(short*)MuttVars[idx].var = val->var;
         break;
       case DT_NUMBER:
-        *((short *) MuttVars[idx].var) = val->var;
+        *(short *) MuttVars[idx].var = val->var;
         break;
       default:
         return -1;
@@ -1918,7 +1899,7 @@ static int parse_alias(struct Buffer *buf, struct Buffer *s, unsigned long data,
     tmp->name = safe_strdup(buf->data);
     /* give the main addressbook code a chance */
     if (CurrentMenu == MENU_ALIAS)
-      set_option(OPT_MENU_CALLER);
+      OPT_MENU_CALLER = true;
   }
   else
   {
@@ -2114,12 +2095,12 @@ static void restore_default(struct Option *p)
       break;
     case DT_BOOL:
       if (p->initial)
-        set_option(p->var);
+        *(bool*)p->var = true;
       else
-        unset_option(p->var);
+        *(bool*)p->var = false;
       break;
     case DT_QUAD:
-      set_quadoption(p->var, p->initial);
+      *(unsigned char*)p->var = p->initial;
       break;
     case DT_NUMBER:
     case DT_SORT:
@@ -2184,13 +2165,13 @@ static void restore_default(struct Option *p)
     mutt_set_menu_redraw(MENU_PAGER, REDRAW_FLOW);
   }
   if (p->flags & R_RESORT_SUB)
-    set_option(OPT_SORT_SUBTHREADS);
+    OPT_SORT_SUBTHREADS = true;
   if (p->flags & R_RESORT)
-    set_option(OPT_NEED_RESORT);
+    OPT_NEED_RESORT = true;
   if (p->flags & R_RESORT_INIT)
-    set_option(OPT_RESORT_INIT);
+    OPT_RESORT_INIT = true;
   if (p->flags & R_TREE)
-    set_option(OPT_REDRAW_TREE);
+    OPT_REDRAW_TREE = true;
   if (p->flags & R_REFLOW)
     mutt_reflow_windows();
 #ifdef USE_SIDEBAR
@@ -2580,10 +2561,10 @@ static int parse_set(struct Buffer *tmp, struct Buffer *s, unsigned long data,
         for (idx = 0; MuttVars[idx].name; idx++)
           restore_default(&MuttVars[idx]);
         mutt_set_current_menu_redraw_full();
-        set_option(OPT_SORT_SUBTHREADS);
-        set_option(OPT_NEED_RESORT);
-        set_option(OPT_RESORT_INIT);
-        set_option(OPT_REDRAW_TREE);
+        OPT_SORT_SUBTHREADS = true;
+        OPT_NEED_RESORT = true;
+        OPT_RESORT_INIT = true;
+        OPT_REDRAW_TREE = true;
         return 0;
       }
       else
@@ -2623,18 +2604,18 @@ static int parse_set(struct Buffer *tmp, struct Buffer *s, unsigned long data,
       if (query)
       {
         snprintf(err->data, err->dsize,
-                 option(MuttVars[idx].var) ? _("%s is set") : _("%s is unset"),
+                 *(bool*)MuttVars[idx].var ? _("%s is set") : _("%s is unset"),
                  tmp->data);
         return 0;
       }
 
       CHECK_PAGER;
       if (unset)
-        unset_option(MuttVars[idx].var);
+        *(bool*)MuttVars[idx].var = false;
       else if (inv)
-        toggle_option(MuttVars[idx].var);
+        *(bool*)MuttVars[idx].var = !(*(bool*)MuttVars[idx].var);
       else
-        set_option(MuttVars[idx].var);
+        *(bool*)MuttVars[idx].var = true;
     }
     else if (myvar || DTYPE(MuttVars[idx].type) == DT_STRING ||
              DTYPE(MuttVars[idx].type) == DT_PATH || DTYPE(MuttVars[idx].type) == DT_ADDRESS ||
@@ -2791,7 +2772,7 @@ static int parse_set(struct Buffer *tmp, struct Buffer *s, unsigned long data,
         break;
       }
 
-      if (option(OPT_ATTACH_MSG) &&
+      if (OPT_ATTACH_MSG &&
           (mutt_strcmp(MuttVars[idx].name, "reply_regexp") == 0))
       {
         snprintf(err->data, err->dsize,
@@ -2950,7 +2931,7 @@ static int parse_set(struct Buffer *tmp, struct Buffer *s, unsigned long data,
         static const char *const vals[] = { "no", "yes", "ask-no", "ask-yes" };
 
         snprintf(err->data, err->dsize, "%s=%s", MuttVars[idx].name,
-                 vals[quadoption(MuttVars[idx].var)]);
+                 vals[*(unsigned char*)MuttVars[idx].var]);
         break;
       }
 
@@ -2960,13 +2941,13 @@ static int parse_set(struct Buffer *tmp, struct Buffer *s, unsigned long data,
         s->dptr++;
         mutt_extract_token(tmp, s, 0);
         if (mutt_strcasecmp("yes", tmp->data) == 0)
-          set_quadoption(MuttVars[idx].var, MUTT_YES);
+          *(unsigned char*)MuttVars[idx].var = MUTT_YES;
         else if (mutt_strcasecmp("no", tmp->data) == 0)
-          set_quadoption(MuttVars[idx].var, MUTT_NO);
+          *(unsigned char*)MuttVars[idx].var = MUTT_NO;
         else if (mutt_strcasecmp("ask-yes", tmp->data) == 0)
-          set_quadoption(MuttVars[idx].var, MUTT_ASKYES);
+          *(unsigned char*)MuttVars[idx].var = MUTT_ASKYES;
         else if (mutt_strcasecmp("ask-no", tmp->data) == 0)
-          set_quadoption(MuttVars[idx].var, MUTT_ASKNO);
+          *(unsigned char*)MuttVars[idx].var = MUTT_ASKNO;
         else
         {
           snprintf(err->data, err->dsize, _("%s: invalid value"), tmp->data);
@@ -2977,11 +2958,11 @@ static int parse_set(struct Buffer *tmp, struct Buffer *s, unsigned long data,
       else
       {
         if (inv)
-          toggle_quadoption(MuttVars[idx].var);
+          *(unsigned char*)MuttVars[idx].var = toggle_quadoption(*(unsigned char*)MuttVars[idx].var);
         else if (unset)
-          set_quadoption(MuttVars[idx].var, MUTT_NO);
+          *(unsigned char*)MuttVars[idx].var = MUTT_NO;
         else
-          set_quadoption(MuttVars[idx].var, MUTT_YES);
+          *(unsigned char*)MuttVars[idx].var = MUTT_YES;
       }
     }
     else if (DTYPE(MuttVars[idx].type) == DT_SORT)
@@ -3084,13 +3065,13 @@ static int parse_set(struct Buffer *tmp, struct Buffer *s, unsigned long data,
         mutt_set_menu_redraw(MENU_PAGER, REDRAW_FLOW);
       }
       if (MuttVars[idx].flags & R_RESORT_SUB)
-        set_option(OPT_SORT_SUBTHREADS);
+        OPT_SORT_SUBTHREADS = true;
       if (MuttVars[idx].flags & R_RESORT)
-        set_option(OPT_NEED_RESORT);
+        OPT_NEED_RESORT = true;
       if (MuttVars[idx].flags & R_RESORT_INIT)
-        set_option(OPT_RESORT_INIT);
+        OPT_RESORT_INIT = true;
       if (MuttVars[idx].flags & R_TREE)
-        set_option(OPT_REDRAW_TREE);
+        OPT_REDRAW_TREE = true;
       if (MuttVars[idx].flags & R_REFLOW)
         mutt_reflow_windows();
 #ifdef USE_SIDEBAR
@@ -3865,7 +3846,7 @@ int var_to_string(int idx, char *val, size_t len)
     rfc822_write_address(tmp, sizeof(tmp), *((struct Address **) MuttVars[idx].var), 0);
   }
   else if (DTYPE(MuttVars[idx].type) == DT_QUAD)
-    strfcpy(tmp, vals[quadoption(MuttVars[idx].var)], sizeof(tmp));
+    strfcpy(tmp, vals[*(unsigned char*)MuttVars[idx].var], sizeof(tmp));
   else if (DTYPE(MuttVars[idx].type) == DT_NUMBER)
   {
     short sval = *((short *) MuttVars[idx].var);
@@ -3928,7 +3909,7 @@ int var_to_string(int idx, char *val, size_t len)
     strfcpy(tmp, p, sizeof(tmp));
   }
   else if (DTYPE(MuttVars[idx].type) == DT_BOOL)
-    strfcpy(tmp, option(MuttVars[idx].var) ? "yes" : "no", sizeof(tmp));
+    strfcpy(tmp, *(bool*)MuttVars[idx].var ? "yes" : "no", sizeof(tmp));
   else
     return 0;
 
@@ -4302,13 +4283,13 @@ void mutt_init(int skip_sys_rc, struct ListHead *commands)
   /* Do we have a locale definition? */
   if (((p = getenv("LC_ALL")) != NULL && p[0]) || ((p = getenv("LANG")) != NULL && p[0]) ||
       ((p = getenv("LC_CTYPE")) != NULL && p[0]))
-    set_option(OPT_LOCALES);
+    OPT_LOCALES = true;
 #endif
 
 #ifdef HAVE_GETSID
   /* Unset suspend by default if we're the session leader */
   if (getsid(0) == getpid())
-    unset_option(OPT_SUSPEND);
+    OPT_SUSPEND = false;
 #endif
 
   mutt_init_history();
@@ -4408,7 +4389,7 @@ void mutt_init(int skip_sys_rc, struct ListHead *commands)
   {
     if (np->data)
     {
-      if (!option(OPT_NO_CURSES))
+      if (!OPT_NO_CURSES)
         endwin();
       if (source_rc(np->data, &err) != 0)
       {
@@ -4422,7 +4403,7 @@ void mutt_init(int skip_sys_rc, struct ListHead *commands)
   if (execute_commands(commands) != 0)
     need_pause = 1;
 
-  if (need_pause && !option(OPT_NO_CURSES))
+  if (need_pause && !OPT_NO_CURSES)
   {
     if (mutt_any_key_to_continue(NULL) == -1)
       mutt_exit(1);
@@ -4433,7 +4414,7 @@ void mutt_init(int skip_sys_rc, struct ListHead *commands)
   mutt_read_histfile();
 
 #ifdef USE_NOTMUCH
-  if (option(OPT_VIRTUAL_SPOOLFILE))
+  if (OPT_VIRTUAL_SPOOLFILE)
   {
     /* Find the first virtual folder and open it */
     for (struct Buffy *b = Incoming; b; b = b->next)

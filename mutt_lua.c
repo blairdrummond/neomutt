@@ -233,7 +233,7 @@ static int _lua_mutt_get(lua_State *l)
         }
         return 1;
       case DT_QUAD:
-        lua_pushinteger(l, quadoption(opt.var));
+        lua_pushinteger(l, opt.var);
         return 1;
       case DT_REGEX:
       case DT_MAGIC:
@@ -252,7 +252,7 @@ static int _lua_mutt_get(lua_State *l)
         lua_pushinteger(l, (signed short) *((unsigned long *) opt.var));
         return 1;
       case DT_BOOL:
-        lua_pushboolean(l, option(opt.var));
+        lua_pushboolean(l, opt.var);
         return 1;
       default:
         luaL_error(l, "NeoMutt parameter type %d unknown for %s", opt.type, param);

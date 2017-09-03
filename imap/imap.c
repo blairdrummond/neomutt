@@ -88,7 +88,7 @@ int imap_access(const char *path)
   if (imap_parse_path(path, &mx))
     return -1;
 
-  if (!(idata = imap_conn_find(&mx.account, option(OPT_IMAP_PASSIVE) ? MUTT_IMAP_CONN_NONEW : 0)))
+  if (!(idata = imap_conn_find(&mx.account, OPT_IMAP_PASSIVE ? MUTT_IMAP_CONN_NONEW : 0)))
   {
     FREE(&mx.mbox);
     return -1;
@@ -173,7 +173,7 @@ int imap_delete_mailbox(struct Context *ctx, struct ImapMbox *mx)
 
   if (!ctx || !ctx->data)
   {
-    if (!(idata = imap_conn_find(&mx->account, option(OPT_IMAP_PASSIVE) ? MUTT_IMAP_CONN_NONEW : 0)))
+    if (!(idata = imap_conn_find(&mx->account, OPT_IMAP_PASSIVE ? MUTT_IMAP_CONN_NONEW : 0)))
     {
       FREE(&mx->mbox);
       return -1;
@@ -456,7 +456,7 @@ struct ImapData *imap_conn_find(const struct Account0 *account, int flags)
     /* get root delimiter, '/' as default */
     idata->delim = '/';
     imap_exec(idata, "LIST \"\" \"\"", IMAP_CMD_QUEUE);
-    if (option(OPT_IMAP_CHECK_SUBSCRIBED))
+    if (OPT_IMAP_CHECK_SUBSCRIBED)
       imap_exec(idata, "LSUB \"\" \"*\"", IMAP_CMD_QUEUE);
     /* we may need the root delimiter before we open a mailbox */
     imap_exec(idata, NULL, IMAP_CMD_FAIL_OK);
@@ -488,11 +488,11 @@ int imap_open_connection(struct ImapData *idata)
 #ifdef USE_SSL
     /* Attempt STARTTLS if available and desired. */
     if (!idata->conn->ssf &&
-        (option(OPT_SSL_FORCE_TLS) || mutt_bit_isset(idata->capabilities, STARTTLS)))
+        (OPT_SSL_FORCE_TLS || mutt_bit_isset(idata->capabilities, STARTTLS)))
     {
       int rc;
 
-      if (option(OPT_SSL_FORCE_TLS))
+      if (OPT_SSL_FORCE_TLS)
         rc = MUTT_YES;
       else if ((rc = query_quadoption(OPT_SSL_STARTTLS,
                                       _("Secure connection with TLS?"))) == MUTT_ABORT)
@@ -519,7 +519,7 @@ int imap_open_connection(struct ImapData *idata)
       }
     }
 
-    if (option(OPT_SSL_FORCE_TLS) && !idata->conn->ssf)
+    if (OPT_SSL_FORCE_TLS && !idata->conn->ssf)
     {
       mutt_error(_("Encrypted connection unavailable"));
       mutt_sleep(1);
@@ -862,7 +862,7 @@ static int imap_open_mailbox_append(struct Context *ctx, int flags)
     return -1;
 
   snprintf(buf, sizeof(buf), _("Create %s?"), mailbox);
-  if (option(OPT_CONFIRMCREATE) && mutt_yesorno(buf, 1) != MUTT_YES)
+  if (OPT_CONFIRMCREATE && mutt_yesorno(buf, 1) != MUTT_YES)
     return -1;
 
   if (imap_create_mailbox(idata, mailbox) < 0)
@@ -1436,7 +1436,7 @@ int imap_sync_mailbox(struct Context *ctx, int expunge)
     idata->state = IMAP_AUTHENTICATED;
   }
 
-  if (option(OPT_MESSAGE_CACHE_CLEAN))
+  if (OPT_MESSAGE_CACHE_CLEAN)
     imap_cache_clean(idata);
 
   rc = 0;
@@ -1534,7 +1534,7 @@ int imap_check(struct ImapData *idata, int force)
   int result = 0;
 
   /* try IDLE first, unless force is set */
-  if (!force && option(OPT_IMAP_IDLE) && mutt_bit_isset(idata->capabilities, IDLE) &&
+  if (!force && OPT_IMAP_IDLE && mutt_bit_isset(idata->capabilities, IDLE) &&
       (idata->state != IMAP_IDLE || time(NULL) >= idata->lastread + ImapKeepalive))
   {
     if (imap_cmd_idle(idata) < 0)
@@ -1601,7 +1601,7 @@ static int imap_get_mailbox(const char *path, struct ImapData **hidata, char *bu
     mutt_debug(1, "imap_get_mailbox: Error parsing %s\n", path);
     return -1;
   }
-  if (!(*hidata = imap_conn_find(&(mx.account), option(OPT_IMAP_PASSIVE) ? MUTT_IMAP_CONN_NONEW : 0)) ||
+  if (!(*hidata = imap_conn_find(&(mx.account), OPT_IMAP_PASSIVE ? MUTT_IMAP_CONN_NONEW : 0)) ||
       (*hidata)->state < IMAP_AUTHENTICATED)
   {
     FREE(&mx.mbox);
@@ -2030,7 +2030,7 @@ int imap_subscribe(char *path, int subscribe)
   if (!*buf)
     strfcpy(buf, "INBOX", sizeof(buf));
 
-  if (option(OPT_IMAP_CHECK_SUBSCRIBED))
+  if (OPT_IMAP_CHECK_SUBSCRIBED)
   {
     mutt_buffer_init(&token);
     mutt_buffer_init(&err);
@@ -2185,8 +2185,7 @@ int imap_complete(char *dest, size_t dlen, char *path)
     list[0] = '\0';
 
   /* fire off command */
-  snprintf(buf, sizeof(buf), "%s \"\" \"%s%%\"",
-           option(OPT_IMAP_LIST_SUBSCRIBED) ? "LSUB" : "LIST", list);
+  snprintf(buf, sizeof(buf), "%s \"\" \"%s%%\"", OPT_IMAP_LIST_SUBSCRIBED ? "LSUB" : "LIST", list);
 
   imap_cmd_start(idata, buf);
 
@@ -2322,7 +2321,7 @@ int imap_fast_trash(struct Context *ctx, char *dest)
         break;
       mutt_debug(3, "imap_fast_trash: server suggests TRYCREATE\n");
       snprintf(prompt, sizeof(prompt), _("Create %s?"), mbox);
-      if (option(OPT_CONFIRMCREATE) && mutt_yesorno(prompt, 1) != MUTT_YES)
+      if (OPT_CONFIRMCREATE && mutt_yesorno(prompt, 1) != MUTT_YES)
       {
         mutt_clear_error();
         goto out;

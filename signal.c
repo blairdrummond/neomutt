@@ -73,7 +73,7 @@ static void sighandler(int sig)
   switch (sig)
   {
     case SIGTSTP: /* user requested a suspend */
-      if (!option(OPT_SUSPEND))
+      if (!OPT_SUSPEND)
         break;
       IsEndwin = isendwin();
       curs_set(1);
@@ -178,7 +178,7 @@ void mutt_signal_init(void)
  */
 void mutt_block_signals(void)
 {
-  if (!option(OPT_SIGNALS_BLOCKED))
+  if (!OPT_SIGNALS_BLOCKED)
   {
     sigemptyset(&Sigset);
     sigaddset(&Sigset, SIGTERM);
@@ -189,7 +189,7 @@ void mutt_block_signals(void)
     sigaddset(&Sigset, SIGWINCH);
 #endif
     sigprocmask(SIG_BLOCK, &Sigset, 0);
-    set_option(OPT_SIGNALS_BLOCKED);
+    OPT_SIGNALS_BLOCKED = true;
   }
 }
 
@@ -198,10 +198,10 @@ void mutt_block_signals(void)
  */
 void mutt_unblock_signals(void)
 {
-  if (option(OPT_SIGNALS_BLOCKED))
+  if (OPT_SIGNALS_BLOCKED)
   {
     sigprocmask(SIG_UNBLOCK, &Sigset, 0);
-    unset_option(OPT_SIGNALS_BLOCKED);
+    OPT_SIGNALS_BLOCKED = false;
   }
 }
 
@@ -209,7 +209,7 @@ void mutt_block_signals_system(void)
 {
   struct sigaction sa;
 
-  if (!option(OPT_SYS_SIGNALS_BLOCKED))
+  if (!OPT_SYS_SIGNALS_BLOCKED)
   {
     /* POSIX: ignore SIGINT and SIGQUIT & block SIGCHLD  before exec */
     sa.sa_handler = SIG_IGN;
@@ -221,13 +221,13 @@ void mutt_block_signals_system(void)
     sigemptyset(&SigsetSys);
     sigaddset(&SigsetSys, SIGCHLD);
     sigprocmask(SIG_BLOCK, &SigsetSys, 0);
-    set_option(OPT_SYS_SIGNALS_BLOCKED);
+    OPT_SYS_SIGNALS_BLOCKED = true;
   }
 }
 
 void mutt_unblock_signals_system(int catch)
 {
-  if (option(OPT_SYS_SIGNALS_BLOCKED))
+  if (OPT_SYS_SIGNALS_BLOCKED)
   {
     sigprocmask(SIG_UNBLOCK, &SigsetSys, NULL);
     if (catch)
@@ -246,7 +246,7 @@ void mutt_unblock_signals_system(int catch)
       sigaction(SIGINT, &sa, NULL);
     }
 
-    unset_option(OPT_SYS_SIGNALS_BLOCKED);
+    OPT_SYS_SIGNALS_BLOCKED = false;
   }
 }
 

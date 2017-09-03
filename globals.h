@@ -24,15 +24,16 @@
 #define _MUTT_GLOBALS_H
 
 #include <signal.h>
-#include "lib/lib.h"
-#include "list.h"
+#include <stdbool.h>
 #include "where.h"
-#include "mutt_regex.h"
-#include "config/address.h"
+#include "lib/string2.h"
 
 #ifdef MAIN_C
 /* so that global vars get included */
+#include "config/address.h"
 #include "git_ver.h"
+#include "list.h"
+#include "mutt_regex.h"
 #include "mx.h"
 #include "ncrypt/ncrypt.h"
 #include "sort.h"
@@ -225,13 +226,6 @@ WHERE struct RegexList *UnSubscribedLists;
 WHERE struct ReplaceList *SpamList;
 WHERE struct RegexList *NoSpamList;
 WHERE struct ReplaceList *SubjectRegexList;
-
-/* bit vector for the yes/no/ask variable type */
-#ifdef MAIN_C
-unsigned char QuadOptions[(OPT_QUAD_MAX * 2 + 7) / 8];
-#else
-extern unsigned char QuadOptions[];
-#endif
 
 WHERE unsigned short Counter;
 

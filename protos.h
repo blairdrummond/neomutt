@@ -33,7 +33,7 @@
 #include <time.h>
 #include <wctype.h>
 #include "format_flags.h"
-#include "options.h"
+#include "globals.h"
 
 struct Address;
 struct Alias;
@@ -94,9 +94,7 @@ int mutt_parse_virtual_mailboxes(struct Buffer *path, struct Buffer *s, unsigned
 
 FILE *mutt_open_read(const char *path, pid_t *thepid);
 
-void set_quadoption(int opt, int flag);
 int query_quadoption(int opt, const char *prompt);
-int quadoption(int opt);
 
 char *mutt_extract_message_id(const char *s, const char **saveptr);
 
@@ -381,8 +379,8 @@ int mutt_wctoutf8(char *s, unsigned int c, size_t buflen);
 #else
 #define IsPrint(c)                                                             \
   (isprint((unsigned char) (c)) ||                                             \
-   (option(OPT_LOCALES) ? 0 : ((unsigned char) (c) >= 0xa0)))
-#define IsWPrint(wc) (iswprint(wc) || (option(OPT_LOCALES) ? 0 : (wc >= 0xa0)))
+   (OPT_LOCALES ? 0 : ((unsigned char) (c) >= 0xa0)))
+#define IsWPrint(wc) (iswprint(wc) || (OPT_LOCALES ? 0 : (wc >= 0xa0)))
 #endif
 
 int getdnsdomainname(char *d, size_t len);
