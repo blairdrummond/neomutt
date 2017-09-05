@@ -1010,7 +1010,7 @@ static int is_autoview(struct Body *b)
 
   snprintf(type, sizeof(type), "%s/%s", TYPE(b), b->subtype);
 
-  if (OPT_IMPLICIT_AUTOVIEW)
+  if (ImplicitAutoview)
   {
     /* $implicit_autoview is essentially the same as "auto_view *" */
     is_av = 1;
@@ -1179,7 +1179,7 @@ static int alternative_handler(struct Body *a, struct State *s)
 
   if (choice)
   {
-    if (s->flags & MUTT_DISPLAY && !OPT_WEED)
+    if (s->flags & MUTT_DISPLAY && !Weed)
     {
       fseeko(s->fpin, choice->hdr_offset, SEEK_SET);
       mutt_copy_bytes(s->fpin, s->fpout, choice->offset - choice->hdr_offset);
@@ -1255,7 +1255,7 @@ static int message_handler(struct Body *a, struct State *s)
   {
     mutt_copy_hdr(s->fpin, s->fpout, off_start, b->parts->offset,
                   (((s->flags & MUTT_WEED) ||
-                    ((s->flags & (MUTT_DISPLAY | MUTT_PRINTING)) && OPT_WEED)) ?
+                    ((s->flags & (MUTT_DISPLAY | MUTT_PRINTING)) && Weed)) ?
                        (CH_WEED | CH_REORDER) :
                        0) |
                       (s->prefix ? CH_PREFIX : 0) | CH_DECODE | CH_FROM |
@@ -1347,7 +1347,7 @@ static int multipart_handler(struct Body *a, struct State *s)
       }
       state_puts(" --]\n", s);
       print_part_line(s, p, 0);
-      if (!OPT_WEED)
+      if (!Weed)
       {
         fseeko(s->fpin, p->hdr_offset, SEEK_SET);
         mutt_copy_bytes(s->fpin, s->fpout, p->offset - p->hdr_offset);
@@ -1366,7 +1366,7 @@ static int multipart_handler(struct Body *a, struct State *s)
                  NONULL(p->subtype));
     }
 
-    if ((s->flags & MUTT_REPLYING) && (OPT_INCLUDE_ONLYFIRST) && (s->flags & MUTT_FIRSTDONE))
+    if ((s->flags & MUTT_REPLYING) && (IncludeOnlyfirst) && (s->flags & MUTT_FIRSTDONE))
       break;
   }
 
@@ -1566,7 +1566,7 @@ static int external_body_handler(struct Body *b, struct State *s)
       }
 
       mutt_copy_hdr(s->fpin, s->fpout, ftello(s->fpin), b->parts->offset,
-                    (OPT_WEED ? (CH_WEED | CH_REORDER) : 0) | CH_DECODE, NULL);
+                    (Weed ? (CH_WEED | CH_REORDER) : 0) | CH_DECODE, NULL);
     }
   }
   else if (expiration && expire < time(NULL))
@@ -1581,7 +1581,7 @@ static int external_body_handler(struct Body *b, struct State *s)
                         s);
 
       mutt_copy_hdr(s->fpin, s->fpout, ftello(s->fpin), b->parts->offset,
-                    (OPT_WEED ? (CH_WEED | CH_REORDER) : 0) | CH_DECODE | CH_DISPLAY,
+                    (Weed ? (CH_WEED | CH_REORDER) : 0) | CH_DECODE | CH_DISPLAY,
                     NULL);
     }
   }
@@ -1596,7 +1596,7 @@ static int external_body_handler(struct Body *b, struct State *s)
       state_printf(
           s, _("[-- and the indicated access-type %s is unsupported --]\n"), access_type);
       mutt_copy_hdr(s->fpin, s->fpout, ftello(s->fpin), b->parts->offset,
-                    (OPT_WEED ? (CH_WEED | CH_REORDER) : 0) | CH_DECODE | CH_DISPLAY,
+                    (Weed ? (CH_WEED | CH_REORDER) : 0) | CH_DECODE | CH_DISPLAY,
                     NULL);
     }
   }
@@ -1663,7 +1663,7 @@ static int text_plain_handler(struct Body *b, struct State *s)
 
   while ((buf = mutt_read_line(buf, &sz, s->fpin, NULL, 0)))
   {
-    if ((mutt_strcmp(buf, "-- ") != 0) && OPT_TEXT_FLOWED)
+    if ((mutt_strcmp(buf, "-- ") != 0) && TextFlowed)
     {
       l = mutt_strlen(buf);
       while (l > 0 && buf[l - 1] == ' ')
@@ -1870,7 +1870,7 @@ int mutt_body_handler(struct Body *b, struct State *s)
        */
       if ((WithCrypto & APPLICATION_PGP) && mutt_is_application_pgp(b))
         handler = crypt_pgp_application_pgp_handler;
-      else if (OPT_REFLOW_TEXT &&
+      else if (ReflowText &&
                (mutt_strcasecmp("flowed", mutt_get_parameter("format", b->parameter)) == 0))
         handler = rfc3676_handler;
       else
@@ -1937,7 +1937,7 @@ int mutt_body_handler(struct Body *b, struct State *s)
 
   /* only respect disposition == attachment if we're not
      displaying from the attachment menu (i.e. pager) */
-  if ((!OPT_HONOR_DISPOSITION || (b->disposition != DISPATTACH || OPT_VIEW_ATTACH)) &&
+  if ((!HonorDisposition || (b->disposition != DISPATTACH || OPT_VIEW_ATTACH)) &&
       (plaintext || handler))
   {
     rc = run_decode_and_handler(b, s, handler, plaintext);
@@ -1946,10 +1946,10 @@ int mutt_body_handler(struct Body *b, struct State *s)
      if we're not already being called from there */
   else if ((s->flags & MUTT_DISPLAY) ||
            (b->disposition == DISPATTACH && !OPT_VIEW_ATTACH &&
-            OPT_HONOR_DISPOSITION && (plaintext || handler)))
+            HonorDisposition && (plaintext || handler)))
   {
     state_mark_attach(s);
-    if (OPT_HONOR_DISPOSITION && b->disposition == DISPATTACH)
+    if (HonorDisposition && b->disposition == DISPATTACH)
       fputs(_("[-- This is an attachment "), s->fpout);
     else
       state_printf(s, _("[-- %s/%s is unsupported "), TYPE(b), b->subtype);

@@ -460,7 +460,7 @@ static void cmd_parse_lsub(struct ImapData *idata, char *s)
     return;
   }
 
-  if (!OPT_IMAP_CHECK_SUBSCRIBED)
+  if (!ImapCheckSubscribed)
     return;
 
   idata->cmdtype = IMAP_CT_LIST;
@@ -695,7 +695,7 @@ static void cmd_parse_status(struct ImapData *idata, char *s)
         mutt_debug(3, "Found %s in buffy list (OV: %d ON: %d U: %d)\n", mailbox,
                    olduv, oldun, status->unseen);
 
-        if (OPT_MAIL_CHECK_RECENT)
+        if (MailCheckRecent)
         {
           if (olduv && olduv == status->uidvalidity)
           {
@@ -843,7 +843,7 @@ static int cmd_handle_untagged(struct ImapData *idata)
 
     return -1;
   }
-  else if (OPT_IMAP_SERVERNOISE && (mutt_strncasecmp("NO", s, 2) == 0))
+  else if (ImapServernoise && (mutt_strncasecmp("NO", s, 2) == 0))
   {
     mutt_debug(2, "Handling untagged NO\n");
 

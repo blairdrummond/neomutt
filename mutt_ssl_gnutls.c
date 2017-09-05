@@ -386,7 +386,7 @@ static int tls_check_preauth(const gnutls_datum_t *certdata,
     return -1;
   }
 
-  if (OPT_SSL_VERIFY_DATES != MUTT_NO)
+  if (SslVerifyDates != MUTT_NO)
   {
     if (gnutls_x509_crt_get_expiration_time(cert) < time(NULL))
       *certerr |= CERTERR_EXPIRED;
@@ -394,7 +394,7 @@ static int tls_check_preauth(const gnutls_datum_t *certdata,
       *certerr |= CERTERR_NOTYETVALID;
   }
 
-  if (chainidx == 0 && OPT_SSL_VERIFY_HOST != MUTT_NO &&
+  if (chainidx == 0 && SslVerifyHost != MUTT_NO &&
       !gnutls_x509_crt_check_hostname(cert, hostname) &&
       !tls_check_stored_hostname(certdata, hostname))
     *certerr |= CERTERR_HOSTNAME;
@@ -936,22 +936,22 @@ static int tls_set_priority(struct TlsSockData *data)
   else
     safe_strcat(priority, priority_size, "NORMAL");
 
-  if (!OPT_SSL_USE_TLSV1_2)
+  if (!SslUseTlsv12)
   {
     nproto--;
     safe_strcat(priority, priority_size, ":-VERS-TLS1.2");
   }
-  if (!OPT_SSL_USE_TLSV1_1)
+  if (!SslUseTlsv11)
   {
     nproto--;
     safe_strcat(priority, priority_size, ":-VERS-TLS1.1");
   }
-  if (!OPT_SSL_USE_TLSV1)
+  if (!SslUseTlsv1)
   {
     nproto--;
     safe_strcat(priority, priority_size, ":-VERS-TLS1.0");
   }
-  if (!OPT_SSL_USE_SSLV3)
+  if (!SslUseSslv3)
   {
     nproto--;
     safe_strcat(priority, priority_size, ":-VERS-SSL3.0");
@@ -987,13 +987,13 @@ static int tls_set_priority(struct TlsSockData *data)
 {
   size_t nproto = 0; /* number of tls/ssl protocols */
 
-  if (OPT_SSL_USE_TLSV1_2)
+  if (SslUseTlsv12)
     protocol_priority[nproto++] = GNUTLS_TLS1_2;
-  if (OPT_SSL_USE_TLSV1_1)
+  if (SslUseTlsv11)
     protocol_priority[nproto++] = GNUTLS_TLS1_1;
-  if (OPT_SSL_USE_TLSV1)
+  if (SslUseTlsv1)
     protocol_priority[nproto++] = GNUTLS_TLS1;
-  if (OPT_SSL_USE_SSLV3)
+  if (SslUseSslv3)
     protocol_priority[nproto++] = GNUTLS_SSL3;
   protocol_priority[nproto] = 0;
 

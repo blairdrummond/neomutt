@@ -60,7 +60,7 @@ void _mutt_set_flag(struct Context *ctx, struct Header *h, int flag, int bf, int
 
       if (bf)
       {
-        if (!h->deleted && !ctx->readonly && (!h->flagged || !OPT_FLAG_SAFE))
+        if (!h->deleted && !ctx->readonly && (!h->flagged || !FlagSafe))
         {
           h->deleted = true;
           update = true;

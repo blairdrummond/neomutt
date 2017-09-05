@@ -54,7 +54,7 @@ void mutt_check_rescore(struct Context *ctx)
 {
   int i;
 
-  if (OPT_NEED_RESCORE && OPT_SCORE)
+  if (OPT_NEED_RESCORE && Score)
   {
     if ((Sort & SORT_MASK) == SORT_SCORE || (SortAux & SORT_MASK) == SORT_SCORE)
     {

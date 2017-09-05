@@ -122,7 +122,7 @@ static void print_enriched_string(int index, int attr, unsigned char *s, int do_
         switch (*s)
         {
           case MUTT_TREE_LLCORNER:
-            if (OPT_ASCII_CHARS)
+            if (AsciiChars)
               addch('`');
 #ifdef WACS_LLCORNER
             else
@@ -135,7 +135,7 @@ static void print_enriched_string(int index, int attr, unsigned char *s, int do_
 #endif
             break;
           case MUTT_TREE_ULCORNER:
-            if (OPT_ASCII_CHARS)
+            if (AsciiChars)
               addch(',');
 #ifdef WACS_ULCORNER
             else
@@ -148,7 +148,7 @@ static void print_enriched_string(int index, int attr, unsigned char *s, int do_
 #endif
             break;
           case MUTT_TREE_LTEE:
-            if (OPT_ASCII_CHARS)
+            if (AsciiChars)
               addch('|');
 #ifdef WACS_LTEE
             else
@@ -161,7 +161,7 @@ static void print_enriched_string(int index, int attr, unsigned char *s, int do_
 #endif
             break;
           case MUTT_TREE_HLINE:
-            if (OPT_ASCII_CHARS)
+            if (AsciiChars)
               addch('-');
 #ifdef WACS_HLINE
             else
@@ -174,7 +174,7 @@ static void print_enriched_string(int index, int attr, unsigned char *s, int do_
 #endif
             break;
           case MUTT_TREE_VLINE:
-            if (OPT_ASCII_CHARS)
+            if (AsciiChars)
               addch('|');
 #ifdef WACS_VLINE
             else
@@ -187,7 +187,7 @@ static void print_enriched_string(int index, int attr, unsigned char *s, int do_
 #endif
             break;
           case MUTT_TREE_TTEE:
-            if (OPT_ASCII_CHARS)
+            if (AsciiChars)
               addch('-');
 #ifdef WACS_TTEE
             else
@@ -200,7 +200,7 @@ static void print_enriched_string(int index, int attr, unsigned char *s, int do_
 #endif
             break;
           case MUTT_TREE_BTEE:
-            if (OPT_ASCII_CHARS)
+            if (AsciiChars)
               addch('-');
 #ifdef WACS_BTEE
             else
@@ -286,7 +286,7 @@ static void menu_make_entry(char *s, int l, struct Menu *menu, int i)
 static void menu_pad_string(struct Menu *menu, char *s, size_t n)
 {
   char *scratch = safe_strdup(s);
-  int shift = OPT_ARROW_CURSOR ? 3 : 0;
+  int shift = ArrowCursor ? 3 : 0;
   int cols = menu->indexwin->cols - shift;
 
   mutt_simple_format(s, n, cols, cols, FMT_LEFT, ' ', scratch, mutt_strlen(scratch), 1);
@@ -304,7 +304,7 @@ void menu_redraw_full(struct Menu *menu)
   move(0, 0);
   clrtobot();
 
-  if (OPT_HELP)
+  if (Help)
   {
     SETCOLOR(MT_COLOR_STATUS);
     mutt_window_move(menu->helpwin, 0, 0);
@@ -364,7 +364,7 @@ void menu_redraw_index(struct Menu *menu)
       if (i == menu->current)
       {
         SETCOLOR(MT_COLOR_INDICATOR);
-        if (OPT_ARROW_CURSOR)
+        if (ArrowCursor)
         {
           addstr("->");
           ATTRSET(attr);
@@ -373,7 +373,7 @@ void menu_redraw_index(struct Menu *menu)
         else
           do_color = false;
       }
-      else if (OPT_ARROW_CURSOR)
+      else if (ArrowCursor)
         addstr("   ");
 
       print_enriched_string(i, attr, (unsigned char *) buf, do_color);
@@ -407,7 +407,7 @@ void menu_redraw_motion(struct Menu *menu)
   mutt_window_move(menu->indexwin, menu->oldcurrent + menu->offset - menu->top, 0);
   ATTRSET(old_color);
 
-  if (OPT_ARROW_CURSOR)
+  if (ArrowCursor)
   {
     /* clear the pointer */
     addstr("  ");
@@ -453,7 +453,7 @@ void menu_redraw_current(struct Menu *menu)
   menu_pad_string(menu, buf, sizeof(buf));
 
   SETCOLOR(MT_COLOR_INDICATOR);
-  if (OPT_ARROW_CURSOR)
+  if (ArrowCursor)
   {
     addstr("->");
     ATTRSET(attr);
@@ -490,7 +490,7 @@ void menu_check_recenter(struct Menu *menu)
   int c = MIN(MenuContext, menu->pagelen / 2);
   int old_top = menu->top;
 
-  if (!OPT_MENU_MOVE_OFF && menu->max <= menu->pagelen) /* less entries than lines */
+  if (!MenuMoveOff && menu->max <= menu->pagelen) /* less entries than lines */
   {
     if (menu->top != 0)
     {
@@ -500,7 +500,7 @@ void menu_check_recenter(struct Menu *menu)
   }
   else
   {
-    if (OPT_MENU_SCROLL || (menu->pagelen <= 0) || (c < MenuContext))
+    if (MenuScroll || (menu->pagelen <= 0) || (c < MenuContext))
     {
       if (menu->current < menu->top + c)
         menu->top = menu->current - c;
@@ -519,7 +519,7 @@ void menu_check_recenter(struct Menu *menu)
     }
   }
 
-  if (!OPT_MENU_MOVE_OFF) /* make entries stick to bottom */
+  if (!MenuMoveOff) /* make entries stick to bottom */
     menu->top = MIN(menu->top, menu->max - menu->pagelen);
   menu->top = MAX(menu->top, 0);
 
@@ -559,7 +559,7 @@ void menu_next_line(struct Menu *menu)
     int c = MIN(MenuContext, menu->pagelen / 2);
 
     if (menu->top + 1 < menu->max - c &&
-        (OPT_MENU_MOVE_OFF ||
+        (MenuMoveOff ||
          (menu->max > menu->pagelen && menu->top < menu->max - menu->pagelen)))
     {
       menu->top++;
@@ -612,7 +612,7 @@ static void menu_length_jump(struct Menu *menu, int jumplen)
       menu->top += jumplen;
 
       /* jumped too long? */
-      if ((neg || !OPT_MENU_MOVE_OFF) && DIRECTION * menu->top > tmp)
+      if ((neg || !MenuMoveOff) && DIRECTION * menu->top > tmp)
         menu->top = tmp;
 
       /* need to move the cursor? */
@@ -980,7 +980,7 @@ search_next:
     r += search_dir;
   }
 
-  if (OPT_WRAP_SEARCH && wrap++ == 0)
+  if (WrapSearch && wrap++ == 0)
   {
     r = search_dir == 1 ? 0 : menu->max - 1;
     goto search_next;
@@ -1116,9 +1116,9 @@ int mutt_menu_loop(struct Menu *menu)
     menu->oldcurrent = menu->current;
 
     /* move the cursor out of the way */
-    if (OPT_ARROW_CURSOR)
+    if (ArrowCursor)
       mutt_window_move(menu->indexwin, menu->current - menu->top + menu->offset, 2);
-    else if (OPT_BRAILLE_FRIENDLY)
+    else if (BrailleFriendly)
       mutt_window_move(menu->indexwin, menu->current - menu->top + menu->offset, 0);
     else
       mutt_window_move(menu->indexwin, menu->current - menu->top + menu->offset,
@@ -1157,7 +1157,7 @@ int mutt_menu_loop(struct Menu *menu)
         i = -1;
       }
     }
-    else if (menu->tagged && OPT_AUTO_TAG)
+    else if (menu->tagged && AutoTag)
       menu->tagprefix = true;
 
     mutt_curs_set(1);
@@ -1265,7 +1265,7 @@ int mutt_menu_loop(struct Menu *menu)
       case OP_TAG:
         if (menu->tag && !menu->dialog)
         {
-          if (menu->tagprefix && !OPT_AUTO_TAG)
+          if (menu->tagprefix && !AutoTag)
           {
             for (i = 0; i < menu->max; i++)
               menu->tagged += menu->tag(menu, i, 0);
@@ -1275,7 +1275,7 @@ int mutt_menu_loop(struct Menu *menu)
           {
             int j = menu->tag(menu, menu->current, -1);
             menu->tagged += j;
-            if (j && OPT_RESOLVE && menu->current < menu->max - 1)
+            if (j && Resolve && menu->current < menu->max - 1)
             {
               menu->current++;
               menu->redraw |= REDRAW_MOTION_RESYNCH;
