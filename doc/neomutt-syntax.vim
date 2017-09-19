@@ -904,8 +904,8 @@ syntax keyword muttrcCommand    tag-formats
 
 syntax match muttrcFunction     contained "\<change-vfolder\>"
 syntax match muttrcFunction     contained "\<entire-thread\>"
-syntax match muttrcFunction     contained "\<modify-labels-then-hide\>"
-syntax match muttrcFunction     contained "\<modify-labels\>"
+syntax match muttrcFunction     contained "\<modify-tags-then-hide\>"
+syntax match muttrcFunction     contained "\<modify-tags\>"
 syntax match muttrcFunction     contained "\<sidebar-toggle-virtual\>"
 syntax match muttrcFunction     contained "\<vfolder-from-query\>"
 syntax match muttrcFunction     contained "\<vfolder-window-forward\>"
@@ -913,7 +913,7 @@ syntax match muttrcFunction     contained "\<vfolder-window-backward\>"
 
 " Vim syntax file for the NeoMutt imap keywords feature.
 "
-syntax match muttrcFunction     contained "\<modify-labels\>"
+syntax match muttrcFunction     contained "\<modify-tags\>"
 
 syntax keyword muttrcVarStr     contained skipwhite hidden_tags        nextgroup=muttrcVarEqualsIdxFmt
 

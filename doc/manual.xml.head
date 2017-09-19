@@ -13068,7 +13068,7 @@ virtual-mailboxes "My INBOX" "notmuch://?query=tag:inbox"
               <row>
                 <entry>index,pager</entry>
                 <entry>
-                  <literal>&lt;modify-labels&gt;</literal>
+                  <literal>&lt;modify-tags&gt;</literal>
                 </entry>
                 <entry>add, remove, or toggle notmuch tags; [+]&lt;tag&gt; to
                   add, -&lt;tag&gt; to remove, !&lt;tag&gt; to toggle(notmuch)
@@ -13077,7 +13077,7 @@ virtual-mailboxes "My INBOX" "notmuch://?query=tag:inbox"
               <row>
                 <entry>index,pager</entry>
                 <entry>
-                  <literal>&lt;modify-labels-then-hide&gt;</literal>
+                  <literal>&lt;modify-tags-then-hide&gt;</literal>
                 </entry>
                 <entry>add, remove, or toggle notmuch tags; [+]&lt;tag&gt; to
                   add, -&lt;tag&gt; to remove, !&lt;tag&gt; to togglelabels and
@@ -13284,16 +13284,16 @@ bind index,pager X change-vfolder
 <emphasis role="comment"># read entire thread of the current message</emphasis>
 bind index,pager + entire-thread
 <emphasis role="comment"># modify (notmuch) tags</emphasis>
-bind index,pager \` modify-labels
+bind index,pager \` modify-tags
 <emphasis role="comment"># modify (notmuch) tag non-interactively.</emphasis>
-bind index,pager tt "&lt;modify-labels&gt;!todo\n" "Toggle the 'todo' tag"
+bind index,pager tt "&lt;modify-tags&gt;!todo\n" "Toggle the 'todo' tag"
 <emphasis role="comment"># generate virtual folder from query</emphasis>
 bind index,pager \eX vfolder-from-query
 <emphasis role="comment"># generate virtual folder from query with time window</emphasis>
 bind index,pager &lt; vfolder-window-backward
 bind index,pager &gt; vfolder-window-forward
 <emphasis role="comment"># modify labels and then hide message
-# bind index,pager ??? modify-labels-then-hide
+# bind index,pager ??? modify-tags-then-hide
 # toggle between mailboxes and virtual mailboxes
 # bind index,pager ??? sidebar-toggle-virtual
 # --------------------------------------------------------------------------
