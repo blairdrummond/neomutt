@@ -841,6 +841,7 @@ static int update_header_tags(struct Header *h, notmuch_message_t *msg)
 #endif
   notmuch_tags_t *tags = NULL;
   char *new_tags = NULL;
+  char *old_tags = NULL;
 
   mutt_debug(2, "nm: tags update requested (%s)\n", data->virtual_id);
 
@@ -855,17 +856,28 @@ static int update_header_tags(struct Header *h, notmuch_message_t *msg)
     mutt_str_append_item(&new_tags, t, ' ');
   }
 
-  if (driver_tags_get(h->tags) && new_tags && (strcmp(driver_tags_get(h->tags), new_tags) == 0))
+
+  old_tags = driver_tags_get(&h->tags);
+
+  if (new_tags && old_tags && (strcmp(old_tags, new_tags) == 0))
   {
+    FREE(&old_tags);
     FREE(&new_tags);
     mutt_debug(2, "nm: tags unchanged\n");
     return 1;
   }
 
   /* new version */
-  driver_tags_replace(h->tags, new_tags);
-  mutt_debug(2, "nm: new tags: '%s'\n", driver_tags_get(h->tags));
-  mutt_debug(2, "nm: new tag transforms: '%s'\n", driver_tags_get_transformed(h->tags));
+  driver_tags_replace(&h->tags, new_tags);
+  FREE(&new_tags);
+
+  new_tags = driver_tags_get_transformed(&h->tags);
+  mutt_debug(2, "nm: new tags: '%s'\n", new_tags);
+  FREE(&new_tags);
+
+  new_tags = driver_tags_get(&h->tags);
+  mutt_debug(2, "nm: new tag transforms: '%s'\n", new_tags);
+  FREE(&new_tags);
 
   return 0;
 }
@@ -961,7 +973,6 @@ static int init_header(struct Header *h, const char *path, notmuch_message_t *ms
 
   h->data = safe_calloc(1, sizeof(struct NmHdrData));
   h->free_cb = deinit_header;
-  driver_tags_init(h->tags);
 
   /*
    * Notmuch ensures that message Id exists (if not notmuch Notmuch will
@@ -1595,7 +1606,10 @@ static int rename_filename(struct NmCtxData *data, const char *old,
   {
     notmuch_message_maildir_flags_to_tags(msg);
     update_header_tags(h, msg);
-    update_tags(msg, driver_tags_get(h->tags));
+
+    char *tags = driver_tags_get(&h->tags);
+    update_tags(msg, tags);
+    FREE(&tags);
   }
 
   rc = 0;
@@ -2114,8 +2128,11 @@ int nm_record_message(struct Context *ctx, char *path, struct Header *h)
   if (st == NOTMUCH_STATUS_SUCCESS && msg)
   {
     notmuch_message_maildir_flags_to_tags(msg);
-    if (h)
-      update_tags(msg, driver_tags_get(h->tags));
+    if (h) {
+      char *tags = driver_tags_get(&h->tags);
+      update_tags(msg, tags);
+      FREE(&tags);
+    }
     if (NmRecordTags)
       update_tags(msg, NmRecordTags);
   }
