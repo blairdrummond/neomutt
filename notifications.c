@@ -24,6 +24,7 @@
 #include "keymap.h"
 #include "lib/mapping.h"
 #include "lib/memory.h"
+#include "lib/message.h"
 #include "lib/string2.h"
 #include "mutt.h"
 #include "mutt_menu.h"
@@ -66,6 +67,12 @@ static void notifications_entry(char *b, size_t blen, struct Menu *menu, int num
 
 void mutt_notifications_show(void)
 {
+  if (!mutt_has_notifications())
+  {
+    mutt_error(_("There are no notifications"));
+    return;
+  }
+
   size_t nof_notifications = 0;
   struct Notification *np;
   TAILQ_FOREACH(np, &Notifications, entries)
@@ -118,4 +125,9 @@ void mutt_notifications_add(const char *s)
   np = safe_calloc(1, sizeof(struct Notification));
   np->data = safe_strdup(s);
   TAILQ_INSERT_TAIL(&Notifications, np, entries);
+}
+
+bool mutt_has_notifications(void)
+{
+  return !TAILQ_EMPTY(&Notifications);
 }
