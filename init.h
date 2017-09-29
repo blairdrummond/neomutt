@@ -4430,16 +4430,16 @@ struct Option MuttVars[] = {
   ** .pp
   ** When \fIset\fP, NeoMutt will collapse all threads when entering a folder.
   */
-  /*--*/
-  { "pgp_encrypt_self",   DT_QUAD, R_NONE, OPT_PGP_ENCRYPT_SELF,   MUTT_NO },
-  { "smime_encrypt_self", DT_QUAD, R_NONE, OPT_SMIME_ENCRYPT_SELF, MUTT_NO },
-
   { "show_notifications", DT_BOOL, R_NONE, OPT_SHOW_NOTIFICATIONS, MUTT_NO },
   /*
    ** .pp
    ** When \fIset\fP, and if there is any notification, NeoMutt will show the
    ** notifications screen on startup.
    */
+
+  /*--*/
+  { "pgp_encrypt_self",   DT_QUAD, R_NONE, OPT_PGP_ENCRYPT_SELF,   MUTT_NO },
+  { "smime_encrypt_self", DT_QUAD, R_NONE, OPT_SMIME_ENCRYPT_SELF, MUTT_NO },
 
   { NULL, 0, 0, 0, 0 },
 };
