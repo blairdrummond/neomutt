@@ -222,6 +222,7 @@ const struct Binding OpMain[] = { /* map: index */
   { "modify-labels-then-hide",   OP_MAIN_MODIFY_LABELS_THEN_HIDE,   NULL },
   { "entire-thread",             OP_MAIN_ENTIRE_THREAD,             NULL },
 #endif
+  { "show-notifications",        OP_NOTIFICATIONS_SHOW,             NULL },
   { NULL,                        0,                                 NULL },
 };
 

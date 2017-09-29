@@ -234,6 +234,7 @@
   _fmt(OP_MAIN_SHOW_LIMIT,                N_("show currently active limit pattern")) \
   _fmt(OP_MAIN_COLLAPSE_THREAD,           N_("collapse/uncollapse current thread")) \
   _fmt(OP_MAIN_COLLAPSE_ALL,              N_("collapse/uncollapse all threads")) \
+  _fmt(OP_NOTIFICATIONS_SHOW,             N_("show notifications")) \
 
 #define OPS_CRYPT(_fmt) \
   _fmt(OP_DECRYPT_SAVE,                   N_("make decrypted copy and delete")) \
