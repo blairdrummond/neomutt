@@ -609,6 +609,15 @@ int mutt_fetch_recips(struct Envelope *out, struct Envelope *in, int flags)
       mutt_addr_append(&out->cc, in->cc, true);
     }
   }
+  if (option(OPT_ASKCC))
+  {
+    if (mutt_yesorno("CC Group?",0) == MUTT_YES)
+    {
+      rfc822_append(&out->cc, in->to, 1);
+      rfc822_append(&out->cc, in->cc, 1);
+    }
+    mutt_window_clearline(MuttMessageWindow, 0);
+  }
   return 0;
 }
 
