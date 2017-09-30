@@ -613,16 +613,11 @@ int mutt_fetch_recips(struct Envelope *out, struct Envelope *in, int flags)
   // Are there multiple people to respond to?
   int total = 0;
   for (tmp = in->to; tmp; tmp = tmp->next)
-  {
     total++;
-  }
-  if (!tmp)
-  {
-    for (tmp = in->cc; tmp; tmp = tmp->next)
-    {
-      total++;
-    }
-  }
+
+  for (tmp = in->cc; tmp; tmp = tmp->next)
+    total++;
+
   // total > 1  ==>  there are people to respond to 
   if (option(OPT_ASKCC) && total > 1)
   {
