@@ -619,11 +619,12 @@ int mutt_fetch_recips(struct Envelope *out, struct Envelope *in, int flags)
     total++;
 
   // total > 1  ==>  there are people to respond to 
-  if (option(OPT_ASKCC) && total > 1)
+  // if (option(OPT_ASKCC) && total > 1)
+  if (total > 1)
   {
-    if (mutt_yesorno("CC Others?",0) == MUTT_YES)
+    if (mutt_yesorno("CC Others?", 0) == MUTT_YES)
     {
-      rfc822_append(&out->cc, in->to, 1);
+      rfc822_append(&out->to, in->to, 1);
       rfc822_append(&out->cc, in->cc, 1);
     }
     mutt_window_clearline(MuttMessageWindow, 0);
