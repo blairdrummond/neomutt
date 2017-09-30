@@ -621,8 +621,7 @@ int mutt_fetch_recips(struct Envelope *out, struct Envelope *in, int flags)
   // total > 1  ==>  there are people to respond to 
   if (option(OPT_ASKCC) && total > 1)
   {
-    sprintf(prompt, "%d", total); 
-    if (mutt_yesorno(prompt,0) == MUTT_YES)
+    if (mutt_yesorno("CC Others?",0) == MUTT_YES)
     {
       rfc822_append(&out->cc, in->to, 1);
       rfc822_append(&out->cc, in->cc, 1);
