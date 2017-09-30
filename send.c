@@ -620,7 +620,7 @@ int mutt_fetch_recips(struct Envelope *out, struct Envelope *in, int flags)
   {
     for (tmp = in->cc; tmp; tmp = tmp->next)
     {
-total++;
+      total++;
     }
   }
   // total > 1  ==>  there are people to respond to 
