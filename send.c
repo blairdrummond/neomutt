@@ -609,9 +609,25 @@ int mutt_fetch_recips(struct Envelope *out, struct Envelope *in, int flags)
       mutt_addr_append(&out->cc, in->cc, true);
     }
   }
-  if (option(OPT_ASKCC))
+
+  // Are there multiple people to respond to?
+  int total = 0;
+  for (tmp = in->to; tmp; tmp = tmp->next)
   {
-    if (mutt_yesorno("CC Group?",0) == MUTT_YES)
+    total++;
+  }
+  if (!tmp)
+  {
+    for (tmp = in->cc; tmp; tmp = tmp->next)
+    {
+total++;
+    }
+  }
+  // total > 1  ==>  there are people to respond to 
+  if (option(OPT_ASKCC) && total > 1)
+  {
+    sprintf(prompt, "%d", total); 
+    if (mutt_yesorno(prompt,0) == MUTT_YES)
     {
       rfc822_append(&out->cc, in->to, 1);
       rfc822_append(&out->cc, in->cc, 1);
