@@ -847,12 +847,11 @@ int mutt_fetch_recips(struct Envelope *out, struct Envelope *in, SendFlags flags
     }
   }
 
-  // Are there multiple people to respond to?
   int total = 0;
-  for (tmp = in->to; tmp; tmp = tmp->next)
+  struct Address *a = NULL;
+  TAILQ_FOREACH(a, &in->to, entries)
     total++;
-
-  for (tmp = in->cc; tmp; tmp = tmp->next)
+  TAILQ_FOREACH(a, &in->cc, entries)
     total++;
 
   // total > 1  ==>  there are people to respond to 
@@ -861,8 +860,10 @@ int mutt_fetch_recips(struct Envelope *out, struct Envelope *in, SendFlags flags
   {
     if (mutt_yesorno("Reply All?", 0) == MUTT_YES)
     {
-      mutt_addr_append(&out->to, in->to, 1);
-      mutt_addr_append(&out->cc, in->cc, 1);
+	  TAILQ_FOREACH(a, &in->to, entries)
+			  mutt_addrlist_append(&out->to, mutt_addr_copy(a));
+	  TAILQ_FOREACH(a, &in->cc, entries)
+		mutt_addrlist_append(&out->cc, mutt_addr_copy(a));
     }
     // mutt_window_clearline(MuttMessageWindow, 0);
   }
