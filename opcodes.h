@@ -20,10 +20,8 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _MUTT_OPCODES_H
-#define _MUTT_OPCODES_H
-
-#include "config.h"
+#ifndef MUTT_OPCODES_H
+#define MUTT_OPCODES_H
 
 // clang-format off
 #define OPS_CORE(_fmt) \
@@ -31,6 +29,11 @@
   _fmt(OP_ATTACH_COLLAPSE,                N_("toggle display of subparts")) \
   _fmt(OP_ATTACH_VIEW_MAILCAP,            N_("force viewing of attachment using mailcap")) \
   _fmt(OP_ATTACH_VIEW_TEXT,               N_("view attachment as text")) \
+  _fmt(OP_AUTOCRYPT_ACCT_MENU,            N_("manage autocrypt accounts")) \
+  _fmt(OP_AUTOCRYPT_CREATE_ACCT,          N_("create a new autocrypt account")) \
+  _fmt(OP_AUTOCRYPT_DELETE_ACCT,          N_("delete the current account")) \
+  _fmt(OP_AUTOCRYPT_TOGGLE_ACTIVE,        N_("toggle the current account active/inactive")) \
+  _fmt(OP_AUTOCRYPT_TOGGLE_PREFER,        N_("toggle the current account prefer-encrypt flag")) \
   _fmt(OP_BOTTOM_PAGE,                    N_("move to the bottom of the page")) \
   _fmt(OP_BOUNCE_MESSAGE,                 N_("remail a message to another user")) \
   _fmt(OP_BROWSER_GOTO_FOLDER,            N_("swap the current folder position with $folder if it exists")) \
@@ -40,12 +43,13 @@
   _fmt(OP_BROWSER_TOGGLE_LSUB,            N_("toggle view all/subscribed mailboxes (IMAP only)")) \
   _fmt(OP_BROWSER_UNSUBSCRIBE,            N_("unsubscribe from current mbox (IMAP/NNTP only)")) \
   _fmt(OP_BROWSER_VIEW_FILE,              N_("view file")) \
-  _fmt(OP_BUFFY_LIST,                     N_("list mailboxes with new mail")) \
   _fmt(OP_CATCHUP,                        N_("mark all articles in newsgroup as read")) \
   _fmt(OP_CHANGE_DIRECTORY,               N_("change directories")) \
   _fmt(OP_CHECK_NEW,                      N_("check mailboxes for new mail")) \
+  _fmt(OP_CHECK_STATS,                    N_("calculate message statistics for all mailboxes")) \
   _fmt(OP_COMPOSE_ATTACH_FILE,            N_("attach files to this message")) \
   _fmt(OP_COMPOSE_ATTACH_MESSAGE,         N_("attach messages to this message")) \
+  _fmt(OP_COMPOSE_AUTOCRYPT_MENU,         N_("show autocrypt compose menu options")) \
   _fmt(OP_COMPOSE_ATTACH_NEWS_MESSAGE,    N_("attach news articles to this message")) \
   _fmt(OP_COMPOSE_EDIT_BCC,               N_("edit the BCC list")) \
   _fmt(OP_COMPOSE_EDIT_CC,                N_("edit the CC list")) \
@@ -56,7 +60,7 @@
   _fmt(OP_COMPOSE_EDIT_FOLLOWUP_TO,       N_("edit the Followup-To field")) \
   _fmt(OP_COMPOSE_EDIT_FROM,              N_("edit the from field")) \
   _fmt(OP_COMPOSE_EDIT_HEADERS,           N_("edit the message with headers")) \
-  _fmt(OP_COMPOSE_EDIT_LANGUAGE,          N_("edit the Content-Language of the attachment")) \
+  _fmt(OP_COMPOSE_EDIT_LANGUAGE,          N_("edit the 'Content-Language' of the attachment")) \
   _fmt(OP_COMPOSE_EDIT_MESSAGE,           N_("edit the message")) \
   _fmt(OP_COMPOSE_EDIT_MIME,              N_("edit attachment using mailcap entry")) \
   _fmt(OP_COMPOSE_EDIT_NEWSGROUPS,        N_("edit the newsgroups list")) \
@@ -65,8 +69,8 @@
   _fmt(OP_COMPOSE_EDIT_TO,                N_("edit the TO list")) \
   _fmt(OP_COMPOSE_EDIT_X_COMMENT_TO,      N_("edit the X-Comment-To field")) \
   _fmt(OP_COMPOSE_GET_ATTACHMENT,         N_("get a temporary copy of an attachment")) \
-  _fmt(OP_COMPOSE_GROUP_ALTS,             N_("group tagged attachments as multipart/alternative")) \
-  _fmt(OP_COMPOSE_GROUP_LINGUAL,          N_("group tagged attachments as multipart/multilingual")) \
+  _fmt(OP_COMPOSE_GROUP_ALTS,             N_("group tagged attachments as 'multipart/alternative'")) \
+  _fmt(OP_COMPOSE_GROUP_LINGUAL,          N_("group tagged attachments as 'multipart/multilingual'")) \
   _fmt(OP_COMPOSE_ISPELL,                 N_("run ispell on the message")) \
   _fmt(OP_COMPOSE_MOVE_DOWN,              N_("move an attachment down in the attachment list")) \
   _fmt(OP_COMPOSE_MOVE_UP,                N_("move an attachment up in the attachment list")) \
@@ -78,7 +82,7 @@
   _fmt(OP_COMPOSE_TOGGLE_DISPOSITION,     N_("toggle disposition between inline/attachment")) \
   _fmt(OP_COMPOSE_TOGGLE_RECODE,          N_("toggle recoding of this attachment")) \
   _fmt(OP_COMPOSE_TOGGLE_UNLINK,          N_("toggle whether to delete file after sending it")) \
-  _fmt(OP_COMPOSE_TO_SENDER,              N_("compose a new message to the sender")) \
+  _fmt(OP_COMPOSE_TO_SENDER,              N_("compose new message to the current message sender")) \
   _fmt(OP_COMPOSE_UPDATE_ENCODING,        N_("update an attachment's encoding info")) \
   _fmt(OP_COMPOSE_WRITE_MESSAGE,          N_("write the message to a folder")) \
   _fmt(OP_COPY_MESSAGE,                   N_("copy a message to a file/mailbox")) \
@@ -93,6 +97,7 @@
   _fmt(OP_DELETE_MAILBOX,                 N_("delete the current mailbox (IMAP only)")) \
   _fmt(OP_DELETE_SUBTHREAD,               N_("delete all messages in subthread")) \
   _fmt(OP_DELETE_THREAD,                  N_("delete all messages in thread")) \
+  _fmt(OP_DESCEND_DIRECTORY,              N_("descend into a directory")) \
   _fmt(OP_DISPLAY_ADDRESS,                N_("display full address of sender")) \
   _fmt(OP_DISPLAY_HEADERS,                N_("display message and toggle header weeding")) \
   _fmt(OP_DISPLAY_MESSAGE,                N_("display a message")) \
@@ -100,7 +105,6 @@
   _fmt(OP_EDITOR_BACKWARD_CHAR,           N_("move the cursor one character to the left")) \
   _fmt(OP_EDITOR_BACKWARD_WORD,           N_("move the cursor to the beginning of the word")) \
   _fmt(OP_EDITOR_BOL,                     N_("jump to the beginning of the line")) \
-  _fmt(OP_EDITOR_BUFFY_CYCLE,             N_("cycle among incoming mailboxes")) \
   _fmt(OP_EDITOR_CAPITALIZE_WORD,         N_("capitalize the word")) \
   _fmt(OP_EDITOR_COMPLETE,                N_("complete filename or alias")) \
   _fmt(OP_EDITOR_COMPLETE_QUERY,          N_("complete address with query")) \
@@ -116,6 +120,7 @@
   _fmt(OP_EDITOR_KILL_EOW,                N_("delete chars from the cursor to the end of the word")) \
   _fmt(OP_EDITOR_KILL_LINE,               N_("delete all chars on the line")) \
   _fmt(OP_EDITOR_KILL_WORD,               N_("delete the word in front of the cursor")) \
+  _fmt(OP_EDITOR_MAILBOX_CYCLE,           N_("cycle among incoming mailboxes")) \
   _fmt(OP_EDITOR_QUOTE_CHAR,              N_("quote the next typed key")) \
   _fmt(OP_EDITOR_TRANSPOSE_CHARS,         N_("transpose character under cursor with previous")) \
   _fmt(OP_EDITOR_UPCASE_WORD,             N_("convert the word to upper case")) \
@@ -138,6 +143,7 @@
   _fmt(OP_GET_MESSAGE,                    N_("get message with Message-Id")) \
   _fmt(OP_GET_PARENT,                     N_("get parent of the current message")) \
   _fmt(OP_GOTO_PARENT,                    N_("go to parent directory")) \
+  _fmt(OP_GROUP_CHAT_REPLY,               N_("reply to all recipients preserving To/Cc")) \
   _fmt(OP_GROUP_REPLY,                    N_("reply to all recipients")) \
   _fmt(OP_HALF_DOWN,                      N_("scroll down 1/2 page")) \
   _fmt(OP_HALF_UP,                        N_("scroll up 1/2 page")) \
@@ -149,6 +155,7 @@
   _fmt(OP_LOAD_ACTIVE,                    N_("load list of all newsgroups from NNTP server")) \
   _fmt(OP_MACRO,                          N_("execute a macro")) \
   _fmt(OP_MAIL,                           N_("compose a new mail message")) \
+  _fmt(OP_MAILBOX_LIST,                   N_("list mailboxes with new mail")) \
   _fmt(OP_MAIN_BREAK_THREAD,              N_("break the thread in two")) \
   _fmt(OP_MAIN_CHANGE_FOLDER,             N_("open a different folder")) \
   _fmt(OP_MAIN_CHANGE_FOLDER_READONLY,    N_("open a different folder in read only mode")) \
@@ -272,6 +279,7 @@
   _fmt(OP_MAIN_CHANGE_VFOLDER,            N_("open a different virtual folder")) \
   _fmt(OP_MAIN_ENTIRE_THREAD,             N_("read entire thread of the current message")) \
   _fmt(OP_MAIN_VFOLDER_FROM_QUERY,        N_("generate virtual folder from query")) \
+  _fmt(OP_MAIN_VFOLDER_FROM_QUERY_READONLY, N_("generate a read-only virtual folder from query")) \
   _fmt(OP_MAIN_WINDOWED_VFOLDER_BACKWARD, N_("shifts virtual folder time window backwards")) \
   _fmt(OP_MAIN_WINDOWED_VFOLDER_FORWARD,  N_("shifts virtual folder time window forwards"))
 #else
@@ -309,7 +317,7 @@
   OPS_SMIME(_fmt) \
   OPS_CRYPT(_fmt) \
 
-enum mutt_ops {
+enum MuttOps {
 #define DEFINE_OPS(opcode, help_string) opcode,
   OPS(DEFINE_OPS)
 #undef DEFINE_OPS
@@ -317,4 +325,4 @@ enum mutt_ops {
 };
 // clang-format on
 
-#endif /* _MUTT_OPCODES_H */
+#endif /* MUTT_OPCODES_H */

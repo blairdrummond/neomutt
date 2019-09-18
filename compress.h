@@ -21,18 +21,35 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _MUTT_COMPRESS_H
-#define _MUTT_COMPRESS_H
+#ifndef MUTT_COMPRESS_H
+#define MUTT_COMPRESS_H
 
 #include <stdbool.h>
+#include <stdio.h>
 #include "mx.h"
 
-struct Context;
+struct Mailbox;
 
-bool mutt_comp_can_append(struct Context *ctx);
+/**
+ * struct CompressInfo - Private data for compress
+ *
+ * This object gets attached to the Mailbox.
+ */
+struct CompressInfo
+{
+  const char *cmd_append;        ///< append-hook command
+  const char *cmd_close;         ///< close-hook  command
+  const char *cmd_open;          ///< open-hook   command
+  long size;                     ///< size of the compressed file
+  const struct MxOps *child_ops; ///< callbacks of de-compressed file
+  bool locked;                   ///< if realpath is locked
+  FILE *fp_lock;                 ///< fp used for locking
+};
+
+bool mutt_comp_can_append(struct Mailbox *m);
 bool mutt_comp_can_read(const char *path);
 int mutt_comp_valid_command(const char *cmd);
 
-extern struct MxOps mx_comp_ops;
+extern struct MxOps MxCompOps;
 
-#endif /* _MUTT_COMPRESS_H */
+#endif /* MUTT_COMPRESS_H */

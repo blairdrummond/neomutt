@@ -1,6 +1,6 @@
 /**
  * @file
- * Message logging
+ * Logging Dispatcher
  *
  * @authors
  * Copyright (C) 2017 Richard Russon <rich@flatcap.org>
@@ -20,14 +20,26 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _LOGGING_H
-#define _LOGGING_H
+#ifndef MUTT_LIB_LOGGING_H
+#define MUTT_LIB_LOGGING_H
 
 #include <stdbool.h>
 #include <stdio.h>
 #include <time.h>
 #include "queue.h"
 
+/**
+ * typedef log_dispatcher_t - Prototype for a logging function
+ * @param stamp    Unix time (optional)
+ * @param file     Source file
+ * @param line     Source line
+ * @param function Source function
+ * @param level    Logging level, e.g. #LL_WARNING
+ * @param ...      Format string and parameters, like printf()
+ * @retval -1 Error
+ * @retval  0 Success, filtered
+ * @retval >0 Success, number of characters written
+ */
 typedef int (*log_dispatcher_t)(time_t stamp, const char *file, int line, const char *function, int level, ...);
 
 extern log_dispatcher_t MuttLogger;
@@ -37,15 +49,18 @@ extern log_dispatcher_t MuttLogger;
  */
 enum LogLevel
 {
-  LL_PERROR  = -3,
-  LL_ERROR   = -2,
-  LL_WARNING = -1,
-  LL_MESSAGE =  0,
-  LL_DEBUG1  =  1,
-  LL_DEBUG2  =  2,
-  LL_DEBUG3  =  3,
-  LL_DEBUG4  =  4,
-  LL_DEBUG5  =  5,
+  LL_PERROR  = -3, ///< Log perror (using errno)
+  LL_ERROR   = -2, ///< Log error
+  LL_WARNING = -1, ///< Log warning
+  LL_MESSAGE =  0, ///< Log informational message
+  LL_DEBUG1  =  1, ///< Log at debug level 1
+  LL_DEBUG2  =  2, ///< Log at debug level 2
+  LL_DEBUG3  =  3, ///< Log at debug level 3
+  LL_DEBUG4  =  4, ///< Log at debug level 4
+  LL_DEBUG5  =  5, ///< Log at debug level 5
+  LL_NOTIFY  =  6, ///< Log of notifications
+
+  LL_MAX,
 };
 
 /**
@@ -53,22 +68,15 @@ enum LogLevel
  */
 struct LogLine
 {
-  time_t time;
-  const char *file;
-  int line;
-  const char *function;
-  int level;
-  char *message;
-  STAILQ_ENTRY(LogLine) entries;
+  time_t time;                   ///< Timestamp of the message
+  const char *file;              ///< Source file
+  int line;                      ///< Line number in source file
+  const char *function;          ///< C function
+  int level;                     ///< Log level, e.g. #LL_DEBUG1
+  char *message;                 ///< Message to be logged
+  STAILQ_ENTRY(LogLine) entries; ///< Linked list
 };
-
-/**
- * struct LogList - A list of log lines
- *
- * The Log is stored as a STAILQ.
- * This means that insertions are quick at the head and tail of the list.
- */
-STAILQ_HEAD(LogList, LogLine);
+STAILQ_HEAD(LogLineList, LogLine);
 
 #define mutt_debug(LEVEL, ...) MuttLogger(0, __FILE__, __LINE__, __func__, LEVEL,      __VA_ARGS__)
 #define mutt_warning(...)      MuttLogger(0, __FILE__, __LINE__, __func__, LL_WARNING, __VA_ARGS__)
@@ -76,9 +84,10 @@ STAILQ_HEAD(LogList, LogLine);
 #define mutt_error(...)        MuttLogger(0, __FILE__, __LINE__, __func__, LL_ERROR,   __VA_ARGS__)
 #define mutt_perror(...)       MuttLogger(0, __FILE__, __LINE__, __func__, LL_PERROR,  __VA_ARGS__)
 
-int log_disp_file    (time_t stamp, const char *file, int line, const char *function, int level, ...);
-int log_disp_queue   (time_t stamp, const char *file, int line, const char *function, int level, ...);
-int log_disp_terminal(time_t stamp, const char *file, int line, const char *function, int level, ...);
+int  log_disp_file    (time_t stamp, const char *file, int line, const char *function, int level, ...);
+int  log_disp_null    (time_t stamp, const char *file, int line, const char *function, int level, ...);
+int  log_disp_queue   (time_t stamp, const char *file, int line, const char *function, int level, ...);
+int  log_disp_terminal(time_t stamp, const char *file, int line, const char *function, int level, ...);
 
 int  log_queue_add(struct LogLine *ll);
 void log_queue_empty(void);
@@ -93,5 +102,4 @@ int  log_file_set_filename(const char *file, bool verbose);
 int  log_file_set_level(int level, bool verbose);
 void log_file_set_version(const char *version);
 
-#endif /* _LOGGING_H */
-
+#endif /* MUTT_LIB_LOGGING_H */

@@ -232,10 +232,11 @@ configuration file.
 .
 .PP
 .nf
-\fBcolor\fP \fIobject\fP \fIforeground\fP \fIbackground\fP
-\fBcolor\fP { header | body } \fIforeground\fP \fIbackground\fP \fIregex\fP
-\fBcolor\fP index-object \fIforeground\fP \fIbackground\fP \fIpattern\fP
+\fBcolor\fP \fIobject\fP [ \fIattribute\fP ... ] \fIforeground\fP \fIbackground\fP
+\fBcolor\fP { header | body } [ \fIattribute\fP ... ] \fIforeground\fP \fIbackground\fP \fIregex\fP
+\fBcolor\fP index-object [ \fIattribute\fP ... ] \fIforeground\fP \fIbackground\fP \fIpattern\fP
 \fBcolor\fP compose \fIcomposeobject\fP \fIforeground\fP \fIbackground\fP
+\fBcolor\fP compose \fIcomposeobject\fP [ \fIattribute\fP ... ] \fIforeground\fP \fIbackground\fP
 \fBuncolor\fP { index-object | header | body } { \fB*\fP | \fIpattern\fP ... }
 .fi
 .IP
@@ -293,6 +294,10 @@ a message, \fBindex-object\fP can match \fIpattern\fP in the message index.
 Note that IMAP server-side searches (=b, =B, =h) are not supported for color
 index patterns.
 .IP
+Valid composeobjects include
+.BR header ", " security_encrypt ", " security_sign ", "
+.BR security_both ", " security_none .
+.IP
 Valid colors include:
 .BR default ", "
 .BR black ", "
@@ -305,6 +310,10 @@ Valid colors include:
 .BR white ", "
 .BR color\fIN\fP "."
 .IP
+Valid attributes include:
+.BR none ", " bold ", " underline ", "
+.BR reverse ", and " standout .
+IP
 The \fBuncolor\fP command can be applied to the index, header and body objects
 only. It removes entries from the list. You must specify the same \fIpattern\fP
 specified in the \fBcolor\fP command for it to be removed. The pattern
@@ -324,6 +333,16 @@ meaning of \fIkeyid\fP is to be taken broadly: This can be a different email
 address, a numerical \fIkeyid\fP, or even just an arbitrary search string. You
 may use multiple \fBcrypt-hook\fPs with the same \fIregex\fP; multiple matching
 \fBcrypt-hook\fPs result in the use of multiple \fIkeyid\fPs for a recipient.
+.TP
+\fBindex-format-hook\fP \fIname\fP [\fB!\fP]\fIpattern\fP \fIformat-string\fP
+This command is used to inject format strings dynamically into
+$index_format based on pattern matching against the current message.
+.IP
+The $index_format expando \fI%@name@\fP specifies a placeholder for
+the injection. Index-format-hooks with the same \fIname\fP are matched
+using \fIpattern\fP against the current message. Matching is done in
+the order specified in the .neomuttrc, with the first match being
+used. The hook's \fIformat-string\fP is then substituted and evaluated.
 .
 .PP
 .nf
@@ -481,12 +500,17 @@ shown in the help screens if they contain a \fIdescription\fP.
 .PP
 .nf
 \fBmailboxes\fP \fImailbox\fP [ \fImailbox\fP ... ]
+\fBnamed-mailboxes\fP \fIdescription\fP \fImailbox\fP [\fIdescription\fP \fImailbox\fP ... ]
 \fBunmailboxes\fP { \fB*\fP | \fImailbox\fP ... }
 .fi
 .IP
 The \fBmailboxes\fP specifies folders which can receive mail and which will be
 checked for new messages. When changing folders, pressing space will cycle
 through folders with new mail.
+.IP
+The \fBnamed-mailboxes\fP is an alternative to \fBmailboxes\fP that allows
+adding a description for a mailbox. NeoMutt can be configured to display the
+description instead of the mailbox path.
 .IP
 The \fBunmailboxes\fP command is used to remove a file name from the list of
 folders which can receive mail. If \(lq\fB*\fP\(rq is specified as the file
@@ -508,6 +532,11 @@ NeoMutt initializes the default list to contain only the \fBSubject\fP and
 \fBBody\fP \fIheader-field\fPs, which are the only requirement specified by the
 \fImailto:\fP specification in RFC2368, and the \fBCc\fP, \fBIn-Reply-To\fP,
 \fBReferences\fP headers to aid with replies to mailing lists.
+.TP
+\fBecho\fP \fImessage\fP
+Prints \fImessage\fP to the message window. After printing the
+message, echo will pause for the number of seconds specified by
+$sleep_time.
 .
 .PP
 .nf
@@ -560,9 +589,8 @@ a global \fIneomuttrc\fP.
 \fBunmono\fP { index-object | header | body } { \fB*\fP | \fIpattern\fP ... }
 .fi
 .IP
-For terminals which don't support color, you can still assign \fIattribute\fPs
-to objects (see \fBcolor\fP command above). Valid attributes include:
-.BR none ", " bold ", " underline ", " reverse ", and " standout "."
+For terminals which don't support color, you can still assign
+attributes to objects.
 .
 .PP
 .nf
@@ -820,7 +848,8 @@ select messages.
 .TS
 box tab(|);
 lb s | lb
-l s | lx .
+l s | lx
+.
 \0Pattern|Description
 _
 \0~A|T{
@@ -972,11 +1001,11 @@ old messages
 T}
 _
 \0~P|T{
-messages from you (consults \fBalternates\fP)
+messages from you (consults $from, \fBalternates\fP, and local account/hostname information)
 T}
 _
 \0~p|T{
-messages addressed to you (consults \fBalternates\fP)
+messages addressed to you (consults $from, \fBalternates\fP, and local account/hostname information)
 T}
 _
 \0~Q|T{
@@ -1042,7 +1071,7 @@ T}
 _
 \0=/ \fISTRING\fP|T{
 IMAP custom server-side search for \fISTRING\fP. Currently only defined for
-Gmail. See section \(lq\fBGMail Patterns\fP\(rq in NeoMutt manual.
+Gmail. See section \(lq\fBGmail Patterns\fP\(rq in NeoMutt manual.
 T}
 _
 \0~=|T{
@@ -1079,22 +1108,22 @@ T{
 T}
 .T&
 l l s .
-\p
-\0\h'2m'\fB*\fP)|T{
+.PP
+\0\fB*\fP)|T{
 The message number ranges (introduced by \(lq\fB~m\fP\(rq) are even
 more general and powerful than the other types of ranges. Read on and see
 section \(lq\fBMessage Ranges\fP\(rq in manual.
 T}
-\0\h'2m'\fB**\fP)|T{
+\0\fB**\fP)|T{
 The forms \(lq<\fIMAX\fP\(rq, \(lq>\fIMIN\fP\(rq, \(lq\fIMIN\fP-\(rq and
 \(lq-\fIMAX\fP\(rq are allowed, too.
 T}
-\0\h'2m'\fB***\fP)|T{
+\0\fB***\fP)|T{
 The suffixes \(lqK\(rq and \(lqM\(rq are allowed to specify
 kilobyte and megabyte respectively.
 T}
 .TE
-\p
+.PP
 .ad
 .
 .PP
@@ -1264,16 +1293,16 @@ identical plus and minus error margins.
 .\"\0m|Months
 .\"\0y|Years
 .\".TE
-.\"\p
+.\".PP
 .\".
 .TS
 allbox center tab(|);
 lb c c c c
 lb l l l l .
-\0Date Unit|d|w|m|y
-\0Description|Days|Weeks|Months|Years
+\0Date Unit|S|M|H|d|w|m|y
+\0Description|Seconds|Minutes|Hours|Days|Weeks|Months|Years
 .TE
-\p
+.PP
 .
 .PP
 \fBExample\fP: To select any messages two weeks around January 15, 2001, you'd

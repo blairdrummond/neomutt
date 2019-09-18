@@ -21,33 +21,25 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _CONN_SOCKET_H
-#define _CONN_SOCKET_H
+#ifndef MUTT_CONN_SOCKET_H
+#define MUTT_CONN_SOCKET_H
 
 #include <stddef.h>
 #include <time.h>
 
-#include "mutt/queue.h"
-
+/**
+ * enum ConnectionType - Type of connection
+ */
 enum ConnectionType
 {
-  MUTT_CONNECTION_SIMPLE,
-  MUTT_CONNECTION_TUNNEL,
-  MUTT_CONNECTION_SSL,
+  MUTT_CONNECTION_SIMPLE, ///< Simple TCP socket connection
+  MUTT_CONNECTION_TUNNEL, ///< Tunnelled connection
+  MUTT_CONNECTION_SSL,    ///< SSL/TLS-encrypted connection
 };
 
 struct Connection;
 
-/**
- * struct ConnectionList - A list of connections
- */
-TAILQ_HEAD(ConnectionList, Connection);
-
-/* stupid hack for imap_logout_all */
-struct ConnectionList *mutt_socket_head(void);
-
 struct Connection *mutt_socket_new(enum ConnectionType type);
-void mutt_socket_free(struct Connection *conn);
 
 int mutt_socket_open(struct Connection *conn);
 int mutt_socket_close(struct Connection *conn);
@@ -64,4 +56,4 @@ int raw_socket_open(struct Connection *conn);
 int raw_socket_close(struct Connection *conn);
 int raw_socket_poll(struct Connection *conn, time_t wait_secs);
 
-#endif /* _CONN_SOCKET_H */
+#endif /* MUTT_CONN_SOCKET_H */

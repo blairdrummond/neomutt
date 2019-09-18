@@ -20,8 +20,8 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _MUTT_HANDLER_H
-#define _MUTT_HANDLER_H
+#ifndef MUTT_HANDLER_H
+#define MUTT_HANDLER_H
 
 #include <stddef.h>
 #include <iconv.h>
@@ -30,9 +30,18 @@
 struct Body;
 struct State;
 
+/* These Config Variables are only used in handler.c */
+extern bool  C_HonorDisposition;
+extern bool  C_ImplicitAutoview;
+extern bool  C_IncludeEncrypted;
+extern bool  C_IncludeOnlyfirst;
+extern struct Slist *C_PreferredLanguages;
+extern bool  C_ReflowText;
+extern char *C_ShowMultipartAlternative;
+
 int  mutt_body_handler(struct Body *b, struct State *s);
 bool mutt_can_decode(struct Body *a);
 void mutt_decode_attachment(struct Body *b, struct State *s);
 void mutt_decode_base64(struct State *s, size_t len, bool istext, iconv_t cd);
 
-#endif /* _MUTT_HANDLER_H */
+#endif /* MUTT_HANDLER_H */

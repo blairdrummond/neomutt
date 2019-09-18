@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include <wctype.h>
 #include "mbyte.h"
 #include "buffer.h"
 #include "charset.h"
@@ -53,19 +54,19 @@ bool OptLocales; /**< (pseudo) set if user has valid locale definition */
  */
 int mutt_mb_charlen(const char *s, int *width)
 {
+  if (!s || !*s)
+    return 0;
+
   wchar_t wc;
   mbstate_t mbstate;
   size_t k, n;
-
-  if (!s || !*s)
-    return 0;
 
   n = mutt_str_strlen(s);
   memset(&mbstate, 0, sizeof(mbstate));
   k = mbrtowc(&wc, s, n, &mbstate);
   if (width)
     *width = wcwidth(wc);
-  return (k == (size_t)(-1) || k == (size_t)(-2)) ? -1 : k;
+  return ((k == (size_t)(-1)) || (k == (size_t)(-2))) ? -1 : k;
 }
 
 /**
@@ -122,7 +123,7 @@ bool mutt_mb_get_initials(const char *name, char *buf, size_t buflen)
       name++;
   }
 
-  *buf = 0;
+  *buf = '\0';
   return true;
 }
 
@@ -150,7 +151,7 @@ int mutt_mb_width(const char *str, int col, bool display)
         l = 1;
       /* correctly calc tab stop, even for sending as the
        * line should look pretty on the receiving end */
-      if (wc == L'\t' || (nl && wc == L' '))
+      if ((wc == L'\t') || (nl && (wc == L' ')))
       {
         nl = 0;
         l = 8 - (col % 8);
@@ -177,7 +178,7 @@ int mutt_mb_width(const char *str, int col, bool display)
 int mutt_mb_wcwidth(wchar_t wc)
 {
   int n = wcwidth(wc);
-  if (IsWPrint(wc) && n > 0)
+  if (IsWPrint(wc) && (n > 0))
     return n;
   if (!(wc & ~0x7f))
     return 2;
@@ -194,6 +195,9 @@ int mutt_mb_wcwidth(wchar_t wc)
  */
 int mutt_mb_wcswidth(const wchar_t *s, size_t n)
 {
+  if (!s)
+    return 0;
+
   int w = 0;
   while (n--)
     w += mutt_mb_wcwidth(*s++);
@@ -212,12 +216,15 @@ int mutt_mb_wcswidth(const wchar_t *s, size_t n)
  */
 size_t mutt_mb_width_ceiling(const wchar_t *s, size_t n, int w1)
 {
+  if (!s)
+    return 0;
+
   const wchar_t *s0 = s;
   int w = 0;
   for (; n; s++, n--)
     if ((w += mutt_mb_wcwidth(*s)) > w1)
       break;
-  return (s - s0);
+  return s - s0;
 }
 
 /**
@@ -229,6 +236,9 @@ size_t mutt_mb_width_ceiling(const wchar_t *s, size_t n, int w1)
  */
 void mutt_mb_wcstombs(char *dest, size_t dlen, const wchar_t *src, size_t slen)
 {
+  if (!dest || !src)
+    return;
+
   mbstate_t st;
   size_t k;
 
@@ -276,21 +286,24 @@ void mutt_mb_wcstombs(char *dest, size_t dlen, const wchar_t *src, size_t slen)
 
 /**
  * mutt_mb_mbstowcs - Convert a string from multibyte to wide characters
- * @param pwbuf    Buffer for the result
- * @param pwbuflen Length of the result buffer
- * @param i        Starting index into the result buffer
- * @param buf      String to convert
+ * @param[out] pwbuf    Buffer for the result
+ * @param[out] pwbuflen Length of the result buffer
+ * @param[in]  i        Starting index into the result buffer
+ * @param[in]  buf      String to convert
  * @retval num First character after the result
  */
 size_t mutt_mb_mbstowcs(wchar_t **pwbuf, size_t *pwbuflen, size_t i, char *buf)
 {
+  if (!pwbuf || !pwbuflen || !buf)
+    return 0;
+
   wchar_t wc;
   mbstate_t st;
   size_t k;
   wchar_t *wbuf = *pwbuf;
   size_t wbuflen = *pwbuflen;
 
-  while (*buf)
+  while (*buf != '\0')
   {
     memset(&st, 0, sizeof(st));
     for (; (k = mbrtowc(&wc, buf, MB_LEN_MAX, &st)) && k != (size_t)(-1) &&
@@ -304,7 +317,7 @@ size_t mutt_mb_mbstowcs(wchar_t **pwbuf, size_t *pwbuflen, size_t i, char *buf)
       }
       wbuf[i++] = wc;
     }
-    if (*buf && (k == (size_t) -1 || k == (size_t) -2))
+    if ((*buf != '\0') && ((k == (size_t) -1) || (k == (size_t) -2)))
     {
       if (i >= wbuflen)
       {
@@ -331,7 +344,7 @@ size_t mutt_mb_mbstowcs(wchar_t **pwbuf, size_t *pwbuflen, size_t i, char *buf)
 bool mutt_mb_is_shell_char(wchar_t ch)
 {
   static const wchar_t shell_chars[] = L"<>&()$?*;{}| "; /* ! not included because it can be part of a pathname in NeoMutt */
-  return (wcschr(shell_chars, ch) != NULL);
+  return wcschr(shell_chars, ch);
 }
 
 /**
@@ -344,6 +357,9 @@ bool mutt_mb_is_shell_char(wchar_t ch)
  */
 bool mutt_mb_is_lower(const char *s)
 {
+  if (!s)
+    return false;
+
   wchar_t w;
   mbstate_t mb;
   size_t l;
@@ -407,13 +423,16 @@ bool mutt_mb_is_display_corrupting_utf8(wchar_t wc)
  */
 int mutt_mb_filter_unprintable(char **s)
 {
+  if (!s || !*s)
+    return -1;
+
   wchar_t wc;
   size_t k, k2;
   char scratch[MB_LEN_MAX + 1];
   char *p = *s;
   mbstate_t mbstate1, mbstate2;
 
-  struct Buffer *b = mutt_buffer_new();
+  struct Buffer buf = mutt_buffer_make(0);
   memset(&mbstate1, 0, sizeof(mbstate1));
   memset(&mbstate2, 0, sizeof(mbstate2));
   for (; (k = mbrtowc(&wc, p, MB_LEN_MAX, &mbstate1)); p += k)
@@ -430,10 +449,9 @@ int mutt_mb_filter_unprintable(char **s)
       continue;
     k2 = wcrtomb(scratch, wc, &mbstate2);
     scratch[k2] = '\0';
-    mutt_buffer_addstr(b, scratch);
+    mutt_buffer_addstr(&buf, scratch);
   }
   FREE(s);
-  *s = b->data ? b->data : mutt_mem_calloc(1, 1);
-  FREE(&b);
+  *s = buf.data ? buf.data : mutt_mem_calloc(1, 1);
   return 0;
 }

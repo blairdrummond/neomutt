@@ -33,16 +33,15 @@
 #include <string.h>
 #include <sys/stat.h>
 #include "mutt/mutt.h"
-#include "conn/conn.h"
+#include "core/lib.h"
 #include "globals.h"
+#include "muttlib.h"
 #include "options.h"
-#include "protos.h"
 #ifdef USE_IMAP
 #include "imap/imap.h"
-#include "mailbox.h"
 #endif
 #ifdef USE_NNTP
-#include "nntp.h"
+#include "nntp/nntp.h"
 #endif
 
 /**
@@ -68,104 +67,50 @@ int mutt_complete(char *buf, size_t buflen)
   char imap_path[PATH_MAX];
 #endif
 
-  mutt_debug(2, "completing %s\n", buf);
+  mutt_debug(LL_DEBUG2, "completing %s\n", buf);
 
 #ifdef USE_NNTP
   if (OptNews)
-  {
-    struct NntpServer *nserv = CurrentNewsSrv;
-    unsigned int n = 0;
-
-    mutt_str_strfcpy(filepart, buf, sizeof(filepart));
-
-    /* special case to handle when there is no filepart yet
-     * find the first subscribed newsgroup */
-    len = mutt_str_strlen(filepart);
-    if (len == 0)
-    {
-      for (; n < nserv->groups_num; n++)
-      {
-        struct NntpData *nntp_data = nserv->groups_list[n];
-
-        if (nntp_data && nntp_data->subscribed)
-        {
-          mutt_str_strfcpy(filepart, nntp_data->group, sizeof(filepart));
-          init = 1;
-          n++;
-          break;
-        }
-      }
-    }
-
-    for (; n < nserv->groups_num; n++)
-    {
-      struct NntpData *nntp_data = nserv->groups_list[n];
-
-      if (nntp_data && nntp_data->subscribed &&
-          (mutt_str_strncmp(nntp_data->group, filepart, len) == 0))
-      {
-        if (init)
-        {
-          for (i = 0; filepart[i] && nntp_data->group[i]; i++)
-          {
-            if (filepart[i] != nntp_data->group[i])
-            {
-              filepart[i] = '\0';
-              break;
-            }
-          }
-          filepart[i] = '\0';
-        }
-        else
-        {
-          mutt_str_strfcpy(filepart, nntp_data->group, sizeof(filepart));
-          init = 1;
-        }
-      }
-    }
-
-    mutt_str_strfcpy(buf, filepart, buflen);
-    return (init ? 0 : -1);
-  }
+    return nntp_complete(buf, buflen);
 #endif
 
 #ifdef USE_IMAP
   /* we can use '/' as a delimiter, imap_complete rewrites it */
-  if (*buf == '=' || *buf == '+' || *buf == '!')
+  if ((*buf == '=') || (*buf == '+') || (*buf == '!'))
   {
     if (*buf == '!')
-      p = NONULL(Spoolfile);
+      p = NONULL(C_Spoolfile);
     else
-      p = NONULL(Folder);
+      p = NONULL(C_Folder);
 
-    mutt_file_concat_path(imap_path, p, buf + 1, sizeof(imap_path));
+    mutt_path_concat(imap_path, p, buf + 1, sizeof(imap_path));
   }
   else
     mutt_str_strfcpy(imap_path, buf, sizeof(imap_path));
 
-  if (mx_is_imap(imap_path))
+  if (imap_path_probe(imap_path, NULL) == MUTT_IMAP)
     return imap_complete(buf, buflen, imap_path);
 #endif
 
-  if (*buf == '=' || *buf == '+' || *buf == '!')
+  if ((*buf == '=') || (*buf == '+') || (*buf == '!'))
   {
     dirpart[0] = *buf;
     dirpart[1] = '\0';
     if (*buf == '!')
-      mutt_str_strfcpy(exp_dirpart, NONULL(Spoolfile), sizeof(exp_dirpart));
+      mutt_str_strfcpy(exp_dirpart, C_Spoolfile, sizeof(exp_dirpart));
     else
-      mutt_str_strfcpy(exp_dirpart, NONULL(Folder), sizeof(exp_dirpart));
+      mutt_str_strfcpy(exp_dirpart, C_Folder, sizeof(exp_dirpart));
     p = strrchr(buf, '/');
     if (p)
     {
       char tmp[PATH_MAX];
-      if (mutt_file_concatn_path(tmp, sizeof(tmp), exp_dirpart, strlen(exp_dirpart),
-                                 buf + 1, (size_t)(p - buf - 1)) == NULL)
+      if (!mutt_path_concatn(tmp, sizeof(tmp), exp_dirpart, strlen(exp_dirpart),
+                             buf + 1, (size_t)(p - buf - 1)))
       {
         return -1;
       }
       mutt_str_strfcpy(exp_dirpart, tmp, sizeof(exp_dirpart));
-      mutt_str_substr_cpy(dirpart, buf, p + 1, sizeof(dirpart));
+      mutt_str_substr_copy(buf, p + 1, dirpart, sizeof(dirpart));
       mutt_str_strfcpy(filepart, p + 1, sizeof(filepart));
     }
     else
@@ -187,7 +132,7 @@ int mutt_complete(char *buf, size_t buflen)
       }
       else
       {
-        mutt_str_substr_cpy(dirpart, buf, p, sizeof(dirpart));
+        mutt_str_substr_copy(buf, p, dirpart, sizeof(dirpart));
         mutt_str_strfcpy(filepart, p + 1, sizeof(filepart));
         mutt_str_strfcpy(exp_dirpart, dirpart, sizeof(exp_dirpart));
         mutt_expand_path(exp_dirpart, sizeof(exp_dirpart));
@@ -205,18 +150,16 @@ int mutt_complete(char *buf, size_t buflen)
 
   if (!dirp)
   {
-    mutt_debug(1, "%s: %s (errno %d).\n", exp_dirpart, strerror(errno), errno);
+    mutt_debug(LL_DEBUG1, "%s: %s (errno %d)\n", exp_dirpart, strerror(errno), errno);
     return -1;
   }
 
-  /*
-   * special case to handle when there is no filepart yet.  find the first
-   * file/directory which is not ``.'' or ``..''
-   */
+  /* special case to handle when there is no filepart yet.  find the first
+   * file/directory which is not "." or ".." */
   len = mutt_str_strlen(filepart);
   if (len == 0)
   {
-    while ((de = readdir(dirp)) != NULL)
+    while ((de = readdir(dirp)))
     {
       if ((mutt_str_strcmp(".", de->d_name) != 0) &&
           (mutt_str_strcmp("..", de->d_name) != 0))
@@ -228,7 +171,7 @@ int mutt_complete(char *buf, size_t buflen)
     }
   }
 
-  while ((de = readdir(dirp)) != NULL)
+  while ((de = readdir(dirp)))
   {
     if (mutt_str_strncmp(de->d_name, filepart, len) == 0)
     {
@@ -237,10 +180,7 @@ int mutt_complete(char *buf, size_t buflen)
         for (i = 0; filepart[i] && de->d_name[i]; i++)
         {
           if (filepart[i] != de->d_name[i])
-          {
-            filepart[i] = '\0';
             break;
-          }
         }
         filepart[i] = '\0';
       }
@@ -252,15 +192,15 @@ int mutt_complete(char *buf, size_t buflen)
         mutt_str_strfcpy(filepart, de->d_name, sizeof(filepart));
 
         /* check to see if it is a directory */
-        if (dirpart[0])
+        if (dirpart[0] != '\0')
         {
           mutt_str_strfcpy(tmp, exp_dirpart, sizeof(tmp));
           mutt_str_strfcpy(tmp + strlen(tmp), "/", sizeof(tmp) - strlen(tmp));
         }
         else
-          tmp[0] = 0;
+          tmp[0] = '\0';
         mutt_str_strfcpy(tmp + strlen(tmp), filepart, sizeof(tmp) - strlen(tmp));
-        if (stat(tmp, &st) != -1 && (st.st_mode & S_IFDIR))
+        if ((stat(tmp, &st) != -1) && (st.st_mode & S_IFDIR))
         {
           mutt_str_strfcpy(filepart + strlen(filepart), "/",
                            sizeof(filepart) - strlen(filepart));
@@ -271,15 +211,15 @@ int mutt_complete(char *buf, size_t buflen)
   }
   closedir(dirp);
 
-  if (dirpart[0])
+  if (dirpart[0] != '\0')
   {
     mutt_str_strfcpy(buf, dirpart, buflen);
-    if ((mutt_str_strcmp("/", dirpart) != 0) && dirpart[0] != '=' && dirpart[0] != '+')
+    if ((mutt_str_strcmp("/", dirpart) != 0) && (dirpart[0] != '=') && (dirpart[0] != '+'))
       mutt_str_strfcpy(buf + strlen(buf), "/", buflen - strlen(buf));
     mutt_str_strfcpy(buf + strlen(buf), filepart, buflen - strlen(buf));
   }
   else
     mutt_str_strfcpy(buf, filepart, buflen);
 
-  return (init ? 0 : -1);
+  return init ? 0 : -1;
 }

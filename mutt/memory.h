@@ -20,15 +20,15 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _MUTT_MEMORY_H
-#define _MUTT_MEMORY_H
+#ifndef MUTT_LIB_MEMORY_H
+#define MUTT_LIB_MEMORY_H
 
 #include <stddef.h>
 
 #undef MAX
 #undef MIN
-#define MAX(a, b) ((a) < (b) ? (b) : (a))
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#define MAX(a, b) (((a) < (b)) ? (b) : (a))
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
 #define mutt_array_size(x) (sizeof(x) / sizeof((x)[0]))
 
@@ -39,4 +39,4 @@ void  mutt_mem_realloc(void *ptr, size_t size);
 
 #define FREE(x) mutt_mem_free(x)
 
-#endif /* _MUTT_MEMORY_H */
+#endif /* MUTT_LIB_MEMORY_H */

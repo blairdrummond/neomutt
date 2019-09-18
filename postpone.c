@@ -36,25 +36,29 @@
 #include <time.h>
 #include <unistd.h>
 #include "mutt/mutt.h"
-#include "conn/conn.h"
+#include "config/lib.h"
+#include "email/lib.h"
+#include "core/lib.h"
 #include "mutt.h"
-#include "body.h"
 #include "context.h"
-#include "envelope.h"
 #include "format_flags.h"
 #include "globals.h"
 #include "handler.h"
-#include "header.h"
+#include "hdrline.h"
 #include "keymap.h"
-#include "mailbox.h"
+#include "mutt_logging.h"
 #include "mutt_menu.h"
+#include "mutt_thread.h"
+#include "muttlib.h"
+#include "mx.h"
 #include "ncrypt/ncrypt.h"
 #include "opcodes.h"
 #include "options.h"
 #include "protos.h"
+#include "send.h"
+#include "sendlib.h"
 #include "sort.h"
 #include "state.h"
-#include "thread.h"
 #ifdef USE_IMAP
 #include "imap/imap.h"
 #endif
@@ -68,63 +72,69 @@ static const struct Mapping PostponeHelp[] = {
 };
 
 static short PostCount = 0;
-static struct Context *PostContext = NULL;
-static short UpdateNumPostponed = 0;
+static bool UpdateNumPostponed = false;
 
 /**
  * mutt_num_postponed - Return the number of postponed messages
+ * @param m    currently selected mailbox
  * @param force
- * * 0 Use a cached value if costly to get a fresh count (IMAP)
- * * 1 Force check
+ * * false Use a cached value if costly to get a fresh count (IMAP)
+ * * true Force check
  * @retval num Postponed messages
  */
-int mutt_num_postponed(int force)
+int mutt_num_postponed(struct Mailbox *m, bool force)
 {
   struct stat st;
-  struct Context ctx;
 
   static time_t LastModify = 0;
   static char *OldPostponed = NULL;
 
   if (UpdateNumPostponed)
   {
-    UpdateNumPostponed = 0;
-    force = 1;
+    UpdateNumPostponed = false;
+    force = true;
   }
 
-  if (mutt_str_strcmp(Postponed, OldPostponed) != 0)
+  if (mutt_str_strcmp(C_Postponed, OldPostponed) != 0)
   {
     FREE(&OldPostponed);
-    OldPostponed = mutt_str_strdup(Postponed);
+    OldPostponed = mutt_str_strdup(C_Postponed);
     LastModify = 0;
-    force = 1;
+    force = true;
   }
 
-  if (!Postponed)
+  if (!C_Postponed)
     return 0;
+
+  // We currently are in the C_Postponed mailbox so just pick the current status
+  if (m && (mutt_str_strcmp(C_Postponed, m->realpath) == 0))
+  {
+    PostCount = m->msg_count - m->msg_deleted;
+    return PostCount;
+  }
 
 #ifdef USE_IMAP
   /* LastModify is useless for IMAP */
-  if (mx_is_imap(Postponed))
+  if (imap_path_probe(C_Postponed, NULL) == MUTT_IMAP)
   {
     if (force)
     {
       short newpc;
 
-      newpc = imap_status(Postponed, 0);
+      newpc = imap_path_status(C_Postponed, false);
       if (newpc >= 0)
       {
         PostCount = newpc;
-        mutt_debug(3, "%d postponed IMAP messages found.\n", PostCount);
+        mutt_debug(LL_DEBUG3, "%d postponed IMAP messages found\n", PostCount);
       }
       else
-        mutt_debug(3, "using old IMAP postponed count.\n");
+        mutt_debug(LL_DEBUG3, "using old IMAP postponed count\n");
     }
     return PostCount;
   }
 #endif
 
-  if (stat(Postponed, &st) == -1)
+  if (stat(C_Postponed, &st) == -1)
   {
     PostCount = 0;
     LastModify = 0;
@@ -137,8 +147,8 @@ int mutt_num_postponed(int force)
 
     char buf[PATH_MAX];
 
-    snprintf(buf, sizeof(buf), "%s/new", Postponed);
-    if (access(buf, F_OK) == 0 && stat(buf, &st) == -1)
+    snprintf(buf, sizeof(buf), "%s/new", C_Postponed);
+    if ((access(buf, F_OK) == 0) && (stat(buf, &st) == -1))
     {
       PostCount = 0;
       LastModify = 0;
@@ -153,17 +163,23 @@ int mutt_num_postponed(int force)
 #endif
     LastModify = st.st_mtime;
 
-    if (access(Postponed, R_OK | F_OK) != 0)
-      return (PostCount = 0);
+    if (access(C_Postponed, R_OK | F_OK) != 0)
+      return PostCount = 0;
 #ifdef USE_NNTP
     if (optnews)
       OptNews = false;
 #endif
-    if (mx_mbox_open(Postponed, MUTT_NOSORT | MUTT_QUIET, &ctx) == NULL)
+    struct Mailbox *m_post = mx_path_resolve(C_Postponed);
+    struct Context *ctx = mx_mbox_open(m_post, MUTT_NOSORT | MUTT_QUIET);
+    if (!ctx)
+    {
+      mailbox_free(&m_post);
       PostCount = 0;
+    }
     else
-      PostCount = ctx.msgcount;
-    mx_fastclose_mailbox(&ctx);
+      PostCount = ctx->mailbox->msg_count;
+    mx_fastclose_mailbox(m_post);
+    ctx_free(&ctx);
 #ifdef USE_NNTP
     if (optnews)
       OptNews = true;
@@ -178,60 +194,56 @@ int mutt_num_postponed(int force)
  */
 void mutt_update_num_postponed(void)
 {
-  UpdateNumPostponed = 1;
+  UpdateNumPostponed = true;
 }
 
 /**
- * post_entry - Format a menu item for the email list
- * @param[out] buf    Buffer in which to save string
- * @param[in]  buflen Buffer length
- * @param[in]  menu   Menu containing aliases
- * @param[in]  num    Index into the menu
+ * post_make_entry - Format a menu item for the email list - Implements Menu::menu_make_entry()
  */
-static void post_entry(char *buf, size_t buflen, struct Menu *menu, int num)
+static void post_make_entry(char *buf, size_t buflen, struct Menu *menu, int line)
 {
-  struct Context *ctx = (struct Context *) menu->data;
+  struct Context *ctx = menu->data;
 
-  mutt_make_string_flags(buf, buflen, NONULL(IndexFormat), ctx, ctx->hdrs[num],
-                         MUTT_FORMAT_ARROWCURSOR);
+  mutt_make_string_flags(buf, buflen, NONULL(C_IndexFormat), ctx, ctx->mailbox,
+                         ctx->mailbox->emails[line], MUTT_FORMAT_ARROWCURSOR);
 }
 
 /**
  * select_msg - Create a Menu to select a postponed message
- * @retval ptr Email Header
+ * @retval ptr Email
  */
-static struct Header *select_msg(void)
+static struct Email *select_msg(struct Context *ctx)
 {
   int r = -1;
   bool done = false;
-  char helpstr[LONG_STRING];
+  char helpstr[1024];
 
-  struct Menu *menu = mutt_menu_new(MENU_POST);
-  menu->make_entry = post_entry;
-  menu->max = PostContext->msgcount;
+  struct Menu *menu = mutt_menu_new(MENU_POSTPONE);
+  menu->menu_make_entry = post_make_entry;
+  menu->max = ctx->mailbox->msg_count;
   menu->title = _("Postponed Messages");
-  menu->data = PostContext;
-  menu->help = mutt_compile_help(helpstr, sizeof(helpstr), MENU_POST, PostponeHelp);
+  menu->data = ctx;
+  menu->help = mutt_compile_help(helpstr, sizeof(helpstr), MENU_POSTPONE, PostponeHelp);
   mutt_menu_push_current(menu);
 
   /* The postponed mailbox is setup to have sorting disabled, but the global
-   * Sort variable may indicate something different.   Sorting has to be
+   * C_Sort variable may indicate something different.   Sorting has to be
    * disabled while the postpone menu is being displayed. */
-  const short orig_sort = Sort;
-  Sort = SORT_ORDER;
+  const short orig_sort = C_Sort;
+  C_Sort = SORT_ORDER;
 
   while (!done)
   {
-    const int i = mutt_menu_loop(menu);
-    switch (i)
+    const int op = mutt_menu_loop(menu);
+    switch (op)
     {
       case OP_DELETE:
       case OP_UNDELETE:
         /* should deleted draft messages be saved in the trash folder? */
-        mutt_set_flag(PostContext, PostContext->hdrs[menu->current],
-                      MUTT_DELETE, (i == OP_DELETE) ? 1 : 0);
-        PostCount = PostContext->msgcount - PostContext->deleted;
-        if (Resolve && menu->current < menu->max - 1)
+        mutt_set_flag(ctx->mailbox, ctx->mailbox->emails[menu->current],
+                      MUTT_DELETE, (op == OP_DELETE));
+        PostCount = ctx->mailbox->msg_count - ctx->mailbox->msg_deleted;
+        if (C_Resolve && (menu->current < menu->max - 1))
         {
           menu->oldcurrent = menu->current;
           menu->current++;
@@ -241,7 +253,7 @@ static struct Header *select_msg(void)
             menu->redraw |= REDRAW_INDEX | REDRAW_STATUS;
           }
           else
-            menu->redraw |= REDRAW_MOTION_RESYNCH;
+            menu->redraw |= REDRAW_MOTION_RESYNC;
         }
         else
           menu->redraw |= REDRAW_CURRENT;
@@ -258,133 +270,145 @@ static struct Header *select_msg(void)
     }
   }
 
-  Sort = orig_sort;
+  C_Sort = orig_sort;
   mutt_menu_pop_current(menu);
-  mutt_menu_destroy(&menu);
-  return (r > -1 ? PostContext->hdrs[r] : NULL);
+  mutt_menu_free(&menu);
+  return (r > -1) ? ctx->mailbox->emails[r] : NULL;
 }
 
 /**
  * mutt_get_postponed - Recall a postponed message
- * @param ctx     Context info, used when recalling a message to which we reply
- * @param hdr     envelope/attachment info for recalled message
- * @param cur     if message was a reply, `cur' is set to the message which `hdr' is in reply to
- * @param fcc     fcc for the recalled message
- * @param fcclen  max length of fcc
+ * @param[in]  ctx     Context info, used when recalling a message to which we reply
+ * @param[in]  hdr     envelope/attachment info for recalled message
+ * @param[out] cur     if message was a reply, 'cur' is set to the message which 'hdr' is in reply to
+ * @param[in]  fcc     fcc for the recalled message
+ * @param[in]  fcclen  max length of fcc
  * @retval -1         Error/no messages
  * @retval 0          Normal exit
- * @retval #SENDREPLY Recalled message is a reply
+ * @retval #SEND_REPLY Recalled message is a reply
  */
-int mutt_get_postponed(struct Context *ctx, struct Header *hdr,
-                       struct Header **cur, char *fcc, size_t fcclen)
+int mutt_get_postponed(struct Context *ctx, struct Email *hdr,
+                       struct Email **cur, char *fcc, size_t fcclen)
 {
-  struct Header *h = NULL;
-  int code = SENDPOSTPONED;
+  if (!C_Postponed)
+    return -1;
+
+  struct Email *e = NULL;
+  int rc = SEND_POSTPONED;
   const char *p = NULL;
-  int opt_delete;
+  struct Context *ctx_post = NULL;
 
-  if (!Postponed)
-    return -1;
+  struct Mailbox *m = mx_path_resolve(C_Postponed);
+  if (ctx->mailbox == m)
+    ctx_post = ctx;
+  else
+    ctx_post = mx_mbox_open(m, MUTT_NOSORT);
 
-  PostContext = mx_mbox_open(Postponed, MUTT_NOSORT, NULL);
-  if (!PostContext)
+  if (!ctx_post)
   {
     PostCount = 0;
-    mutt_error(_("No postponed messages."));
+    mutt_error(_("No postponed messages"));
+    mailbox_free(&m);
     return -1;
   }
 
-  if (!PostContext->msgcount)
+  if (ctx_post->mailbox->msg_count == 0)
   {
     PostCount = 0;
-    mx_mbox_close(PostContext, NULL);
-    FREE(&PostContext);
-    mutt_error(_("No postponed messages."));
+    if (ctx_post == ctx)
+      ctx_post = NULL;
+    else
+      mx_mbox_close(&ctx_post);
+    mutt_error(_("No postponed messages"));
     return -1;
   }
 
-  if (PostContext->msgcount == 1)
+  if (ctx_post->mailbox->msg_count == 1)
   {
     /* only one message, so just use that one. */
-    h = PostContext->hdrs[0];
+    e = ctx_post->mailbox->emails[0];
   }
-  else if ((h = select_msg()) == NULL)
+  else if (!(e = select_msg(ctx_post)))
   {
-    mx_mbox_close(PostContext, NULL);
-    FREE(&PostContext);
+    if (ctx_post == ctx)
+      ctx_post = NULL;
+    else
+      mx_mbox_close(&ctx_post);
     return -1;
   }
 
-  if (mutt_prepare_template(NULL, PostContext, hdr, h, 0) < 0)
+  if (mutt_prepare_template(NULL, ctx_post->mailbox, hdr, e, false) < 0)
   {
-    mx_fastclose_mailbox(PostContext);
-    FREE(&PostContext);
+    if (ctx_post != ctx)
+    {
+      mx_fastclose_mailbox(ctx_post->mailbox);
+      FREE(&ctx_post);
+    }
     return -1;
   }
 
   /* finished with this message, so delete it. */
-  mutt_set_flag(PostContext, h, MUTT_DELETE, 1);
-  mutt_set_flag(PostContext, h, MUTT_PURGE, 1);
+  mutt_set_flag(ctx_post->mailbox, e, MUTT_DELETE, true);
+  mutt_set_flag(ctx_post->mailbox, e, MUTT_PURGE, true);
 
   /* update the count for the status display */
-  PostCount = PostContext->msgcount - PostContext->deleted;
+  PostCount = ctx_post->mailbox->msg_count - ctx_post->mailbox->msg_deleted;
 
   /* avoid the "purge deleted messages" prompt */
-  opt_delete = Delete;
-  Delete = MUTT_YES;
-  mx_mbox_close(PostContext, NULL);
-  Delete = opt_delete;
+  int opt_delete = C_Delete;
+  C_Delete = MUTT_YES;
+  if (ctx_post == ctx)
+    ctx_post = NULL;
+  else
+    mx_mbox_close(&ctx_post);
+  C_Delete = opt_delete;
 
-  FREE(&PostContext);
-
-  struct ListNode *np, *tmp;
+  struct ListNode *np = NULL, *tmp = NULL;
   STAILQ_FOREACH_SAFE(np, &hdr->env->userhdrs, entries, tmp)
   {
-    if (mutt_str_strncasecmp("X-Mutt-References:", np->data, 18) == 0)
+    size_t plen = mutt_str_startswith(np->data, "X-Mutt-References:", CASE_IGNORE);
+    if (plen)
     {
-      if (ctx)
-      {
-        /* if a mailbox is currently open, look to see if the original message
-           the user attempted to reply to is in this mailbox */
-        p = mutt_str_skip_email_wsp(np->data + 18);
-        if (!ctx->id_hash)
-          ctx->id_hash = mutt_make_id_hash(ctx);
-        *cur = mutt_hash_find(ctx->id_hash, p);
-      }
+      /* if a mailbox is currently open, look to see if the original message
+       * the user attempted to reply to is in this mailbox */
+      p = mutt_str_skip_email_wsp(np->data + plen);
+      if (!ctx->mailbox->id_hash)
+        ctx->mailbox->id_hash = mutt_make_id_hash(ctx->mailbox);
+      *cur = mutt_hash_find(ctx->mailbox->id_hash, p);
+
       if (*cur)
-        code |= SENDREPLY;
+        rc |= SEND_REPLY;
     }
-    else if (mutt_str_strncasecmp("X-Mutt-Fcc:", np->data, 11) == 0)
+    else if ((plen = mutt_str_startswith(np->data, "X-Mutt-Fcc:", CASE_IGNORE)))
     {
-      p = mutt_str_skip_email_wsp(np->data + 11);
+      p = mutt_str_skip_email_wsp(np->data + plen);
       mutt_str_strfcpy(fcc, p, fcclen);
       mutt_pretty_mailbox(fcc, fcclen);
 
       /* note that x-mutt-fcc was present.  we do this because we want to add a
        * default fcc if the header was missing, but preserve the request of the
        * user to not make a copy if the header field is present, but empty.
-       * see http://dev.mutt.org/trac/ticket/3653
-       */
-      code |= SENDPOSTPONEDFCC;
+       * see http://dev.mutt.org/trac/ticket/3653 */
+      rc |= SEND_POSTPONED_FCC;
     }
     else if (((WithCrypto & APPLICATION_PGP) != 0) &&
-             ((mutt_str_strncmp("Pgp:", np->data, 4) == 0) /* this is generated
-                                                        * by old neomutt versions
-                                                        */
-              || (mutt_str_strncmp("X-Mutt-PGP:", np->data, 11) == 0)))
+             /* this is generated by old neomutt versions */
+             (mutt_str_startswith(np->data, "Pgp:", CASE_MATCH) ||
+              /* this is the new way */
+              mutt_str_startswith(np->data, "X-Mutt-PGP:", CASE_MATCH)))
     {
-      hdr->security = mutt_parse_crypt_hdr(strchr(np->data, ':') + 1, 1, APPLICATION_PGP);
+      hdr->security = mutt_parse_crypt_hdr(strchr(np->data, ':') + 1, true, APPLICATION_PGP);
       hdr->security |= APPLICATION_PGP;
     }
     else if (((WithCrypto & APPLICATION_SMIME) != 0) &&
-             (mutt_str_strncmp("X-Mutt-SMIME:", np->data, 13) == 0))
+             mutt_str_startswith(np->data, "X-Mutt-SMIME:", CASE_MATCH))
     {
-      hdr->security = mutt_parse_crypt_hdr(strchr(np->data, ':') + 1, 1, APPLICATION_SMIME);
+      hdr->security = mutt_parse_crypt_hdr(strchr(np->data, ':') + 1, true, APPLICATION_SMIME);
       hdr->security |= APPLICATION_SMIME;
     }
 
 #ifdef MIXMASTER
-    else if (mutt_str_strncmp("X-Mutt-Mix:", np->data, 11) == 0)
+    else if (mutt_str_startswith(np->data, "X-Mutt-Mix:", CASE_MATCH))
     {
       mutt_list_free(&hdr->chain);
 
@@ -409,10 +433,10 @@ int mutt_get_postponed(struct Context *ctx, struct Header *hdr,
     FREE(&np);
   }
 
-  if (CryptOpportunisticEncrypt)
+  if (C_CryptOpportunisticEncrypt)
     crypt_opportunistic_encrypt(hdr);
 
-  return code;
+  return rc;
 }
 
 /**
@@ -420,38 +444,39 @@ int mutt_get_postponed(struct Context *ctx, struct Header *hdr,
  * @param p                Header string to parse
  * @param set_empty_signas Allow an empty "Sign as"
  * @param crypt_app App, e.g. #APPLICATION_PGP
- * @retval num Flags, e.g. #ENCRYPT
+ * @retval num SecurityFlags, see #SecurityFlags
  */
-int mutt_parse_crypt_hdr(const char *p, int set_empty_signas, int crypt_app)
+SecurityFlags mutt_parse_crypt_hdr(const char *p, bool set_empty_signas, SecurityFlags crypt_app)
 {
-  char smime_cryptalg[LONG_STRING] = "\0";
-  char sign_as[LONG_STRING] = "\0", *q = NULL;
-  int flags = 0;
+  char smime_cryptalg[1024] = { 0 };
+  char sign_as[1024] = { 0 };
+  char *q = NULL;
+  SecurityFlags flags = SEC_NO_FLAGS;
 
   if (!WithCrypto)
-    return 0;
+    return SEC_NO_FLAGS;
 
   p = mutt_str_skip_email_wsp(p);
-  for (; *p; p++)
+  for (; p[0] != '\0'; p++)
   {
-    switch (*p)
+    switch (p[0])
     {
       case 'c':
       case 'C':
         q = smime_cryptalg;
 
-        if (*(p + 1) == '<')
+        if (p[1] == '<')
         {
-          for (p += 2; *p && (*p != '>') &&
+          for (p += 2; (p[0] != '\0') && (p[0] != '>') &&
                        (q < (smime_cryptalg + sizeof(smime_cryptalg) - 1));
                *q++ = *p++)
           {
           }
 
-          if (*p != '>')
+          if (p[0] != '>')
           {
             mutt_error(_("Illegal S/MIME header"));
-            return 0;
+            return SEC_NO_FLAGS;
           }
         }
 
@@ -460,29 +485,28 @@ int mutt_parse_crypt_hdr(const char *p, int set_empty_signas, int crypt_app)
 
       case 'e':
       case 'E':
-        flags |= ENCRYPT;
+        flags |= SEC_ENCRYPT;
         break;
 
       case 'i':
       case 'I':
-        flags |= INLINE;
+        flags |= SEC_INLINE;
         break;
 
       /* This used to be the micalg parameter.
        *
        * It's no longer needed, so we just skip the parameter in order
-       * to be able to recall old messages.
-       */
+       * to be able to recall old messages.  */
       case 'm':
       case 'M':
-        if (*(p + 1) == '<')
+        if (p[1] == '<')
         {
-          for (p += 2; *p && (*p != '>'); p++)
+          for (p += 2; (p[0] != '\0') && (p[0] != '>'); p++)
             ;
-          if (*p != '>')
+          if (p[0] != '>')
           {
             mutt_error(_("Illegal crypto header"));
-            return 0;
+            return SEC_NO_FLAGS;
           }
         }
 
@@ -490,53 +514,68 @@ int mutt_parse_crypt_hdr(const char *p, int set_empty_signas, int crypt_app)
 
       case 'o':
       case 'O':
-        flags |= OPPENCRYPT;
+        flags |= SEC_OPPENCRYPT;
+        break;
+
+      case 'a':
+      case 'A':
+#ifdef USE_AUTOCRYPT
+        flags |= SEC_AUTOCRYPT;
+#endif
+        break;
+
+      case 'z':
+      case 'Z':
+#ifdef USE_AUTOCRYPT
+        flags |= SEC_AUTOCRYPT_OVERRIDE;
+#endif
         break;
 
       case 's':
       case 'S':
-        flags |= SIGN;
+        flags |= SEC_SIGN;
         q = sign_as;
 
-        if (*(p + 1) == '<')
+        if (p[1] == '<')
         {
-          for (p += 2; *p && (*p != '>') && (q < (sign_as + sizeof(sign_as) - 1));
+          for (p += 2;
+               (p[0] != '\0') && (*p != '>') && (q < (sign_as + sizeof(sign_as) - 1));
                *q++ = *p++)
           {
           }
 
-          if (*p != '>')
+          if (p[0] != '>')
           {
             mutt_error(_("Illegal crypto header"));
-            return 0;
+            return SEC_NO_FLAGS;
           }
         }
 
-        *q = '\0';
+        q[0] = '\0';
         break;
 
       default:
         mutt_error(_("Illegal crypto header"));
-        return 0;
+        return SEC_NO_FLAGS;
     }
   }
 
   /* the cryptalg field must not be empty */
   if (((WithCrypto & APPLICATION_SMIME) != 0) && *smime_cryptalg)
-    mutt_str_replace(&SmimeEncryptWith, smime_cryptalg);
+    mutt_str_replace(&C_SmimeEncryptWith, smime_cryptalg);
 
   /* Set {Smime,Pgp}SignAs, if desired. */
 
   if (((WithCrypto & APPLICATION_PGP) != 0) && (crypt_app == APPLICATION_PGP) &&
-      (flags & SIGN) && (set_empty_signas || *sign_as))
+      (flags & SEC_SIGN) && (set_empty_signas || *sign_as))
   {
-    mutt_str_replace(&PgpSignAs, sign_as);
+    mutt_str_replace(&C_PgpSignAs, sign_as);
   }
 
   if (((WithCrypto & APPLICATION_SMIME) != 0) && (crypt_app == APPLICATION_SMIME) &&
-      (flags & SIGN) && (set_empty_signas || *sign_as))
+      (flags & SEC_SIGN) && (set_empty_signas || *sign_as))
   {
-    mutt_str_replace(&SmimeSignAs, sign_as);
+    mutt_str_replace(&C_SmimeSignAs, sign_as);
   }
 
   return flags;
@@ -545,123 +584,129 @@ int mutt_parse_crypt_hdr(const char *p, int set_empty_signas, int crypt_app)
 /**
  * mutt_prepare_template - Prepare a message template
  * @param fp      If not NULL, file containing the template
- * @param ctx     If fp is NULL, the context containing the header with the template
- * @param newhdr  The template is read into this Header
- * @param hdr     The message to recall/resend
- * @param resend  Set if resending (as opposed to recalling a postponed msg).
+ * @param m       If fp is NULL, the Mailbox containing the header with the template
+ * @param e_new   The template is read into this Header
+ * @param e       Email to recall/resend
+ * @param resend  Set if resending (as opposed to recalling a postponed msg)
  *                Resent messages enable header weeding, and also
- *                discard any existing Message-ID and Mail-Followup-To.
+ *                discard any existing Message-ID and Mail-Followup-To
  * @retval  0 Success
  * @retval -1 Error
  */
-int mutt_prepare_template(FILE *fp, struct Context *ctx, struct Header *newhdr,
-                          struct Header *hdr, short resend)
+int mutt_prepare_template(FILE *fp, struct Mailbox *m, struct Email *e_new,
+                          struct Email *e, bool resend)
 {
   struct Message *msg = NULL;
-  char file[PATH_MAX];
   struct Body *b = NULL;
-  FILE *bfp = NULL;
+  FILE *fp_body = NULL;
   int rc = -1;
   struct State s = { 0 };
-  int sec_type;
+  SecurityFlags sec_type;
+  struct Envelope *protected_headers = NULL;
 
-  if (!fp && (msg = mx_msg_open(ctx, hdr->msgno)) == NULL)
+  if (!fp && !(msg = mx_msg_open(m, e->msgno)))
     return -1;
 
   if (!fp)
     fp = msg->fp;
 
-  bfp = fp;
+  fp_body = fp;
 
   /* parse the message header and MIME structure */
 
-  fseeko(fp, hdr->offset, SEEK_SET);
-  newhdr->offset = hdr->offset;
+  fseeko(fp, e->offset, SEEK_SET);
+  e_new->offset = e->offset;
   /* enable header weeding for resent messages */
-  newhdr->env = mutt_rfc822_read_header(fp, newhdr, 1, resend);
-  newhdr->content->length = hdr->content->length;
-  mutt_parse_part(fp, newhdr->content);
+  e_new->env = mutt_rfc822_read_header(fp, e_new, true, resend);
+  e_new->content->length = e->content->length;
+  mutt_parse_part(fp, e_new->content);
 
   /* If resending a message, don't keep message_id or mail_followup_to.
    * Otherwise, we are resuming a postponed message, and want to keep those
-   * headers if they exist.
-   */
+   * headers if they exist.  */
   if (resend)
   {
-    FREE(&newhdr->env->message_id);
-    FREE(&newhdr->env->mail_followup_to);
+    FREE(&e_new->env->message_id);
+    FREE(&e_new->env->mail_followup_to);
   }
 
   /* decrypt pgp/mime encoded messages */
 
   if (((WithCrypto & APPLICATION_PGP) != 0) &&
-      (sec_type = mutt_is_multipart_encrypted(newhdr->content)))
+      (sec_type = mutt_is_multipart_encrypted(e_new->content)))
   {
-    newhdr->security |= sec_type;
+    e_new->security |= sec_type;
     if (!crypt_valid_passphrase(sec_type))
       goto bail;
 
     mutt_message(_("Decrypting message..."));
-    if ((crypt_pgp_decrypt_mime(fp, &bfp, newhdr->content, &b) == -1) || b == NULL)
+    if ((crypt_pgp_decrypt_mime(fp, &fp_body, e_new->content, &b) == -1) || !b)
     {
       goto bail;
     }
 
-    mutt_body_free(&newhdr->content);
-    newhdr->content = b;
+    mutt_body_free(&e_new->content);
+    e_new->content = b;
+
+    if (b->mime_headers)
+    {
+      protected_headers = b->mime_headers;
+      b->mime_headers = NULL;
+    }
 
     mutt_clear_error();
   }
 
-  /*
-   * remove a potential multipart/signed layer - useful when
-   * resending messages
-   */
-
-  if ((WithCrypto != 0) && mutt_is_multipart_signed(newhdr->content))
+  /* remove a potential multipart/signed layer - useful when
+   * resending messages */
+  if ((WithCrypto != 0) && mutt_is_multipart_signed(e_new->content))
   {
-    newhdr->security |= SIGN;
+    e_new->security |= SEC_SIGN;
     if (((WithCrypto & APPLICATION_PGP) != 0) &&
         (mutt_str_strcasecmp(
-             mutt_param_get(&newhdr->content->parameter, "protocol"),
+             mutt_param_get(&e_new->content->parameter, "protocol"),
              "application/pgp-signature") == 0))
     {
-      newhdr->security |= APPLICATION_PGP;
+      e_new->security |= APPLICATION_PGP;
     }
     else if (WithCrypto & APPLICATION_SMIME)
-      newhdr->security |= APPLICATION_SMIME;
+      e_new->security |= APPLICATION_SMIME;
 
     /* destroy the signature */
-    mutt_body_free(&newhdr->content->parts->next);
-    newhdr->content = mutt_remove_multipart(newhdr->content);
+    mutt_body_free(&e_new->content->parts->next);
+    e_new->content = mutt_remove_multipart(e_new->content);
+
+    if (e_new->content->mime_headers)
+    {
+      mutt_env_free(&protected_headers);
+      protected_headers = e_new->content->mime_headers;
+      e_new->content->mime_headers = NULL;
+    }
   }
 
-  /*
-   * We don't need no primary multipart.
+  /* We don't need no primary multipart.
    * Note: We _do_ preserve messages!
    *
    * XXX - we don't handle multipart/alternative in any
    * smart way when sending messages.  However, one may
-   * consider this a feature.
-   *
-   */
+   * consider this a feature.  */
+  if (e_new->content->type == TYPE_MULTIPART)
+    e_new->content = mutt_remove_multipart(e_new->content);
 
-  if (newhdr->content->type == TYPEMULTIPART)
-    newhdr->content = mutt_remove_multipart(newhdr->content);
+  s.fp_in = fp_body;
 
-  s.fpin = bfp;
+  struct Buffer *file = mutt_buffer_pool_get();
 
   /* create temporary files for all attachments */
-  for (b = newhdr->content; b; b = b->next)
+  for (b = e_new->content; b; b = b->next)
   {
     /* what follows is roughly a receive-mode variant of
-     * mutt_get_tmp_attachment () from muttlib.c
-     */
+     * mutt_get_tmp_attachment () from muttlib.c */
 
-    file[0] = '\0';
+    mutt_buffer_reset(file);
     if (b->filename)
     {
-      mutt_str_strfcpy(file, b->filename, sizeof(file));
+      mutt_buffer_strcpy(file, b->filename);
       b->d_filename = mutt_str_strdup(b->filename);
     }
     else
@@ -674,7 +719,7 @@ int mutt_prepare_template(FILE *fp, struct Context *ctx, struct Header *newhdr,
 
     s.flags = 0;
 
-    if (b->type == TYPETEXT)
+    if (b->type == TYPE_TEXT)
     {
       if (mutt_str_strcasecmp("yes",
                               mutt_param_get(&b->parameter, "x-mutt-noconv")) == 0)
@@ -690,15 +735,15 @@ int mutt_prepare_template(FILE *fp, struct Context *ctx, struct Header *newhdr,
       mutt_param_delete(&b->parameter, "x-mutt-noconv");
     }
 
-    mutt_adv_mktemp(file, sizeof(file));
-    s.fpout = mutt_file_fopen(file, "w");
-    if (!s.fpout)
+    mutt_adv_mktemp(file);
+    s.fp_out = mutt_file_fopen(mutt_b2s(file), "w");
+    if (!s.fp_out)
       goto bail;
 
     if (((WithCrypto & APPLICATION_PGP) != 0) &&
-        ((sec_type = mutt_is_application_pgp(b)) & (ENCRYPT | SIGN)))
+        ((sec_type = mutt_is_application_pgp(b)) & (SEC_ENCRYPT | SEC_SIGN)))
     {
-      if (sec_type & ENCRYPT)
+      if (sec_type & SEC_ENCRYPT)
       {
         if (!crypt_valid_passphrase(APPLICATION_PGP))
           goto bail;
@@ -707,69 +752,81 @@ int mutt_prepare_template(FILE *fp, struct Context *ctx, struct Header *newhdr,
 
       if (mutt_body_handler(b, &s) < 0)
       {
-        mutt_error(_("Decryption failed."));
+        mutt_error(_("Decryption failed"));
         goto bail;
       }
 
-      newhdr->security |= sec_type;
+      if ((b == e_new->content) && !protected_headers)
+      {
+        protected_headers = b->mime_headers;
+        b->mime_headers = NULL;
+      }
 
-      b->type = TYPETEXT;
+      e_new->security |= sec_type;
+      b->type = TYPE_TEXT;
       mutt_str_replace(&b->subtype, "plain");
       mutt_param_delete(&b->parameter, "x-action");
     }
     else if (((WithCrypto & APPLICATION_SMIME) != 0) &&
-             ((sec_type = mutt_is_application_smime(b)) & (ENCRYPT | SIGN)))
+             ((sec_type = mutt_is_application_smime(b)) & (SEC_ENCRYPT | SEC_SIGN)))
     {
-      if (sec_type & ENCRYPT)
+      if (sec_type & SEC_ENCRYPT)
       {
         if (!crypt_valid_passphrase(APPLICATION_SMIME))
           goto bail;
-        crypt_smime_getkeys(newhdr->env);
+        crypt_smime_getkeys(e_new->env);
         mutt_message(_("Decrypting message..."));
       }
 
       if (mutt_body_handler(b, &s) < 0)
       {
-        mutt_error(_("Decryption failed."));
+        mutt_error(_("Decryption failed"));
         goto bail;
       }
 
-      newhdr->security |= sec_type;
-      b->type = TYPETEXT;
+      e_new->security |= sec_type;
+      b->type = TYPE_TEXT;
       mutt_str_replace(&b->subtype, "plain");
     }
     else
       mutt_decode_attachment(b, &s);
 
-    if (mutt_file_fclose(&s.fpout) != 0)
+    if (mutt_file_fclose(&s.fp_out) != 0)
       goto bail;
 
-    mutt_str_replace(&b->filename, file);
+    mutt_str_replace(&b->filename, mutt_b2s(file));
     b->unlink = true;
 
     mutt_stamp_attachment(b);
 
     mutt_body_free(&b->parts);
-    if (b->hdr)
-      b->hdr->content = NULL; /* avoid dangling pointer */
+    if (b->email)
+      b->email->content = NULL; /* avoid dangling pointer */
   }
+
+  if (C_CryptProtectedHeadersRead && protected_headers && protected_headers->subject &&
+      (mutt_str_strcmp(e_new->env->subject, protected_headers->subject) != 0))
+  {
+    mutt_str_replace(&e_new->env->subject, protected_headers->subject);
+  }
+  mutt_env_free(&protected_headers);
 
   /* Fix encryption flags. */
 
   /* No inline if multipart. */
-  if ((WithCrypto != 0) && (newhdr->security & INLINE) && newhdr->content->next)
-    newhdr->security &= ~INLINE;
+  if ((WithCrypto != 0) && (e_new->security & SEC_INLINE) && e_new->content->next)
+    e_new->security &= ~SEC_INLINE;
 
   /* Do we even support multiple mechanisms? */
-  newhdr->security &= WithCrypto | ~(APPLICATION_PGP | APPLICATION_SMIME);
+  e_new->security &= WithCrypto | ~(APPLICATION_PGP | APPLICATION_SMIME);
 
   /* Theoretically, both could be set. Take the one the user wants to set by default. */
-  if ((newhdr->security & APPLICATION_PGP) && (newhdr->security & APPLICATION_SMIME))
+  if ((e_new->security & APPLICATION_PGP) && (e_new->security & APPLICATION_SMIME))
   {
-    if (SmimeIsDefault)
-      newhdr->security &= ~APPLICATION_PGP;
+    if (C_SmimeIsDefault)
+      e_new->security &= ~APPLICATION_PGP;
     else
-      newhdr->security &= ~APPLICATION_SMIME;
+      e_new->security &= ~APPLICATION_SMIME;
   }
 
   rc = 0;
@@ -777,15 +834,16 @@ int mutt_prepare_template(FILE *fp, struct Context *ctx, struct Header *newhdr,
 bail:
 
   /* that's it. */
-  if (bfp != fp)
-    mutt_file_fclose(&bfp);
+  mutt_buffer_pool_release(&file);
+  if (fp_body != fp)
+    mutt_file_fclose(&fp_body);
   if (msg)
-    mx_msg_close(ctx, &msg);
+    mx_msg_close(m, &msg);
 
   if (rc == -1)
   {
-    mutt_env_free(&newhdr->env);
-    mutt_body_free(&newhdr->content);
+    mutt_env_free(&e_new->env);
+    mutt_body_free(&e_new->content);
   }
 
   return rc;

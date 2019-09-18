@@ -35,7 +35,7 @@
 #include <tcutil.h>
 #include "mutt/mutt.h"
 #include "backend.h"
-#include "options.h"
+#include "globals.h"
 
 /**
  * hcache_tokyocabinet_open - Implements HcacheOps::open()
@@ -45,14 +45,14 @@ static void *hcache_tokyocabinet_open(const char *path)
   TCBDB *db = tcbdbnew();
   if (!db)
     return NULL;
-  if (HeaderCacheCompress)
+  if (C_HeaderCacheCompress)
     tcbdbtune(db, 0, 0, 0, -1, -1, BDBTDEFLATE);
   if (tcbdbopen(db, path, BDBOWRITER | BDBOCREAT))
     return db;
   else
   {
     int ecode = tcbdbecode(db);
-    mutt_debug(2, "tcbdbopen failed for %s: %s (ecode %d)\n", path,
+    mutt_debug(LL_DEBUG2, "tcbdbopen failed for %s: %s (ecode %d)\n", path,
                tcbdberrmsg(ecode), ecode);
     tcbdbdel(db);
     return NULL;
@@ -64,11 +64,10 @@ static void *hcache_tokyocabinet_open(const char *path)
  */
 static void *hcache_tokyocabinet_fetch(void *ctx, const char *key, size_t keylen)
 {
-  int sp;
-
   if (!ctx)
     return NULL;
 
+  int sp = 0;
   TCBDB *db = ctx;
   return tcbdbget(db, key, keylen, &sp);
 }
@@ -100,9 +99,9 @@ static int hcache_tokyocabinet_store(void *ctx, const char *key, size_t keylen,
 }
 
 /**
- * hcache_tokyocabinet_delete - Implements HcacheOps::delete()
+ * hcache_tokyocabinet_delete_header - Implements HcacheOps::delete_header()
  */
-static int hcache_tokyocabinet_delete(void *ctx, const char *key, size_t keylen)
+static int hcache_tokyocabinet_delete_header(void *ctx, const char *key, size_t keylen)
 {
   if (!ctx)
     return -1;
@@ -119,18 +118,19 @@ static int hcache_tokyocabinet_delete(void *ctx, const char *key, size_t keylen)
 /**
  * hcache_tokyocabinet_close - Implements HcacheOps::close()
  */
-static void hcache_tokyocabinet_close(void **ctx)
+static void hcache_tokyocabinet_close(void **ptr)
 {
-  if (!ctx || !*ctx)
+  if (!ptr || !*ptr)
     return;
 
-  TCBDB *db = *ctx;
+  TCBDB *db = *ptr;
   if (!tcbdbclose(db))
   {
     int ecode = tcbdbecode(db);
-    mutt_debug(2, "tcbdbclose failed: %s (ecode %d)\n", tcbdberrmsg(ecode), ecode);
+    mutt_debug(LL_DEBUG2, "tcbdbclose failed: %s (ecode %d)\n", tcbdberrmsg(ecode), ecode);
   }
   tcbdbdel(db);
+  *ptr = NULL;
 }
 
 /**

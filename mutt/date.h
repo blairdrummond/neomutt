@@ -20,11 +20,20 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _MUTT_DATE_H
-#define _MUTT_DATE_H
+#ifndef MUTT_LIB_DATE_H
+#define MUTT_LIB_DATE_H
 
 #include <stdbool.h>
 #include <time.h>
+
+/* theoretically time_t can be float but it is integer on most (if not all) systems */
+#define TIME_T_MAX ((((time_t) 1 << (sizeof(time_t) * 8 - 2)) - 1) * 2 + 1)
+#define TIME_T_MIN (-TIME_T_MAX - 1)
+#define TM_YEAR_MAX                                                            \
+  (1970 + (((((TIME_T_MAX - 59) / 60) - 59) / 60) - 23) / 24 / 366)
+#define TM_YEAR_MIN (1970 - (TM_YEAR_MAX - 1970) - 1)
+
+#define MUTT_DATE_NOW -9999 ///< Constant representing the 'current time', see: mutt_date_gmtime(), mutt_date_localtime()
 
 /**
  * struct Tz - List of recognised Timezones
@@ -37,17 +46,22 @@ struct Tz
   bool zoccident;         /**< True if west of UTC, False if East */
 };
 
-int     mutt_date_check_month(const char *s);
-bool    mutt_date_is_day_name(const char *s);
-time_t  mutt_date_local_tz(time_t t);
-char   *mutt_date_make_date(char *buf, size_t buflen);
-int     mutt_date_make_imap(char *buf, size_t buflen, time_t timestamp);
-time_t  mutt_date_make_time(struct tm *t, int local);
-int     mutt_date_make_tls(char *buf, size_t buflen, time_t timestamp);
-void    mutt_date_normalize_time(struct tm *tm);
-time_t  mutt_date_parse_date(const char *s, struct Tz *tz_out);
-time_t  mutt_date_parse_imap(char *s);
-time_t  mutt_date_add_timeout(time_t now, long timeout);
+time_t    mutt_date_add_timeout(time_t now, long timeout);
+int       mutt_date_check_month(const char *s);
+time_t    mutt_date_epoch(void);
+size_t    mutt_date_epoch_ms(void);
+struct tm mutt_date_gmtime(time_t t);
+bool      mutt_date_is_day_name(const char *s);
+size_t    mutt_date_localtime_format(char *buf, size_t buflen, const char *format, time_t t);
+struct tm mutt_date_localtime(time_t t);
+time_t    mutt_date_local_tz(time_t t);
+char *    mutt_date_make_date(char *buf, size_t buflen);
+int       mutt_date_make_imap(char *buf, size_t buflen, time_t timestamp);
+time_t    mutt_date_make_time(struct tm *t, bool local);
+int       mutt_date_make_tls(char *buf, size_t buflen, time_t timestamp);
+void      mutt_date_normalize_time(struct tm *tm);
+time_t    mutt_date_parse_date(const char *s, struct Tz *tz_out);
+time_t    mutt_date_parse_imap(const char *s);
+void      mutt_date_sleep_ms(size_t ms);
 
-
-#endif /* _MUTT_DATE_H */
+#endif /* MUTT_LIB_DATE_H */

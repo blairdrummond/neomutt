@@ -32,6 +32,7 @@
 #include "mutt/mutt.h"
 #include "mutt_window.h"
 #include "globals.h"
+#include "mutt_curses.h"
 #include "mutt_menu.h"
 #include "options.h"
 
@@ -43,6 +44,31 @@ struct MuttWindow *MuttMessageWindow = NULL; /**< Message Window */
 struct MuttWindow *MuttSidebarWindow = NULL; /**< Sidebar Window */
 #endif
 
+/**
+ * mutt_window_new - Create a new Window
+ * @retval ptr New Window
+ */
+struct MuttWindow *mutt_window_new(void)
+{
+  struct MuttWindow *win = mutt_mem_calloc(1, sizeof(struct MuttWindow));
+
+  return win;
+}
+
+/**
+ * mutt_window_free - Free a Window
+ * @param ptr Window to free
+ */
+void mutt_window_free(struct MuttWindow **ptr)
+{
+  if (!ptr || !*ptr)
+    return;
+
+  // struct MuttWindow *win = *ptr;
+
+  FREE(ptr);
+}
+
 #ifdef USE_SLANG_CURSES
 /**
  * vw_printw - Write a formatted string to a Window (function missing from Slang)
@@ -53,7 +79,7 @@ struct MuttWindow *MuttSidebarWindow = NULL; /**< Sidebar Window */
  */
 static int vw_printw(SLcurses_Window_Type *win, const char *fmt, va_list ap)
 {
-  char buf[LONG_STRING];
+  char buf[1024];
 
   (void) SLvsnprintf(buf, sizeof(buf), (char *) fmt, ap);
   SLcurses_waddnstr(win, buf, -1);
@@ -101,9 +127,9 @@ void mutt_window_clrtoeol(struct MuttWindow *win)
 }
 
 /**
- * mutt_window_free - Free the default Windows
+ * mutt_window_free_all - Free all the default Windows
  */
-void mutt_window_free(void)
+void mutt_window_free_all(void)
 {
   FREE(&MuttHelpWindow);
   FREE(&MuttIndexWindow);
@@ -142,12 +168,12 @@ void mutt_window_getxy(struct MuttWindow *win, int *x, int *y)
  */
 void mutt_window_init(void)
 {
-  MuttHelpWindow = mutt_mem_calloc(1, sizeof(struct MuttWindow));
-  MuttIndexWindow = mutt_mem_calloc(1, sizeof(struct MuttWindow));
-  MuttStatusWindow = mutt_mem_calloc(1, sizeof(struct MuttWindow));
-  MuttMessageWindow = mutt_mem_calloc(1, sizeof(struct MuttWindow));
+  MuttHelpWindow = mutt_window_new();
+  MuttIndexWindow = mutt_window_new();
+  MuttStatusWindow = mutt_window_new();
+  MuttMessageWindow = mutt_window_new();
 #ifdef USE_SIDEBAR
-  MuttSidebarWindow = mutt_mem_calloc(1, sizeof(struct MuttWindow));
+  MuttSidebarWindow = mutt_window_new();
 #endif
 }
 
@@ -162,20 +188,6 @@ void mutt_window_init(void)
 int mutt_window_move(struct MuttWindow *win, int row, int col)
 {
   return move(win->row_offset + row, win->col_offset + col);
-}
-
-/**
- * mutt_window_mvaddch - Move the cursor and write a character to a Window
- * @param win Window to write to
- * @param row Row to move to
- * @param col Column to move to
- * @param ch  Character to write
- * @retval OK  Success
- * @retval ERR Error
- */
-int mutt_window_mvaddch(struct MuttWindow *win, int row, int col, const chtype ch)
-{
-  return mvaddch(win->row_offset + row, win->col_offset + col, ch);
 }
 
 /**
@@ -217,6 +229,22 @@ int mutt_window_mvprintw(struct MuttWindow *win, int row, int col, const char *f
 }
 
 /**
+ * mutt_window_copy_size - Copy the size of one Window to another
+ * @param win_src Window to copy
+ * @param win_dst Window to resize
+ */
+void mutt_window_copy_size(const struct MuttWindow *win_src, struct MuttWindow *win_dst)
+{
+  if (!win_src || !win_dst)
+    return;
+
+  win_dst->rows = win_src->rows;
+  win_dst->cols = win_src->cols;
+  win_dst->row_offset = win_src->row_offset;
+  win_dst->col_offset = win_src->col_offset;
+}
+
+/**
  * mutt_window_reflow - Resize the Windows to fit the screen
  */
 void mutt_window_reflow(void)
@@ -224,42 +252,42 @@ void mutt_window_reflow(void)
   if (OptNoCurses)
     return;
 
-  mutt_debug(2, "entering\n");
+  mutt_debug(LL_DEBUG2, "entering\n");
 
   MuttStatusWindow->rows = 1;
   MuttStatusWindow->cols = COLS;
-  MuttStatusWindow->row_offset = StatusOnTop ? 0 : LINES - 2;
+  MuttStatusWindow->row_offset = C_StatusOnTop ? 0 : LINES - 2;
   MuttStatusWindow->col_offset = 0;
 
-  memcpy(MuttHelpWindow, MuttStatusWindow, sizeof(struct MuttWindow));
-  if (!Help)
-    MuttHelpWindow->rows = 0;
+  mutt_window_copy_size(MuttStatusWindow, MuttHelpWindow);
+  if (C_Help)
+    MuttHelpWindow->row_offset = C_StatusOnTop ? LINES - 2 : 0;
   else
-    MuttHelpWindow->row_offset = StatusOnTop ? LINES - 2 : 0;
+    MuttHelpWindow->rows = 0;
 
-  memcpy(MuttMessageWindow, MuttStatusWindow, sizeof(struct MuttWindow));
+  mutt_window_copy_size(MuttStatusWindow, MuttMessageWindow);
   MuttMessageWindow->row_offset = LINES - 1;
 
-  memcpy(MuttIndexWindow, MuttStatusWindow, sizeof(struct MuttWindow));
+  mutt_window_copy_size(MuttStatusWindow, MuttIndexWindow);
   MuttIndexWindow->rows = MAX(
       LINES - MuttStatusWindow->rows - MuttHelpWindow->rows - MuttMessageWindow->rows, 0);
   MuttIndexWindow->row_offset =
-      StatusOnTop ? MuttStatusWindow->rows : MuttHelpWindow->rows;
+      C_StatusOnTop ? MuttStatusWindow->rows : MuttHelpWindow->rows;
 
 #ifdef USE_SIDEBAR
-  if (SidebarVisible)
+  if (C_SidebarVisible)
   {
-    memcpy(MuttSidebarWindow, MuttIndexWindow, sizeof(struct MuttWindow));
-    MuttSidebarWindow->cols = SidebarWidth;
-    MuttIndexWindow->cols -= SidebarWidth;
+    mutt_window_copy_size(MuttIndexWindow, MuttSidebarWindow);
+    MuttSidebarWindow->cols = C_SidebarWidth;
+    MuttIndexWindow->cols -= C_SidebarWidth;
 
-    if (SidebarOnRight)
+    if (C_SidebarOnRight)
     {
-      MuttSidebarWindow->col_offset = COLS - SidebarWidth;
+      MuttSidebarWindow->col_offset = COLS - C_SidebarWidth;
     }
     else
     {
-      MuttIndexWindow->col_offset += SidebarWidth;
+      MuttIndexWindow->col_offset += C_SidebarWidth;
     }
   }
 #endif
@@ -280,16 +308,16 @@ void mutt_window_reflow_message_rows(int mw_rows)
   MuttMessageWindow->rows = mw_rows;
   MuttMessageWindow->row_offset = LINES - mw_rows;
 
-  MuttStatusWindow->row_offset = StatusOnTop ? 0 : LINES - mw_rows - 1;
+  MuttStatusWindow->row_offset = C_StatusOnTop ? 0 : LINES - mw_rows - 1;
 
-  if (Help)
-    MuttHelpWindow->row_offset = StatusOnTop ? LINES - mw_rows - 1 : 0;
+  if (C_Help)
+    MuttHelpWindow->row_offset = C_StatusOnTop ? LINES - mw_rows - 1 : 0;
 
   MuttIndexWindow->rows = MAX(
       LINES - MuttStatusWindow->rows - MuttHelpWindow->rows - MuttMessageWindow->rows, 0);
 
 #ifdef USE_SIDEBAR
-  if (SidebarVisible)
+  if (C_SidebarVisible)
     MuttSidebarWindow->rows = MuttIndexWindow->rows;
 #endif
 
@@ -299,19 +327,19 @@ void mutt_window_reflow_message_rows(int mw_rows)
 }
 
 /**
- * mutt_window_wrap_cols - Calculate the wrap column for a Window
- * @param win  Window
- * @param wrap Wrap config
+ * mutt_window_wrap_cols - Calculate the wrap column for a given screen width
+ * @param width Screen width
+ * @param wrap  Wrap config
  * @retval num Column that text should be wrapped at
  *
  * The wrap variable can be negative, meaning there should be a right margin.
  */
-int mutt_window_wrap_cols(struct MuttWindow *win, short wrap)
+int mutt_window_wrap_cols(int width, short wrap)
 {
   if (wrap < 0)
-    return (win->cols > -wrap) ? (win->cols + wrap) : win->cols;
+    return (width > -wrap) ? (width + wrap) : width;
   else if (wrap)
-    return (wrap < win->cols) ? wrap : win->cols;
+    return (wrap < width) ? wrap : width;
   else
-    return win->cols;
+    return width;
 }

@@ -4,6 +4,7 @@
  *
  * @authors
  * Copyright (C) 2017 Richard Russon <rich@flatcap.org>
+ * Copyright (C) 2019 Pietro Cerutti <gahr@gahr.ch>
  *
  * @copyright
  * This program is free software: you can redistribute it and/or modify it under
@@ -20,16 +21,18 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _NCRYPT_CRYPT_MOD_H
-#define _NCRYPT_CRYPT_MOD_H
+#ifndef MUTT_NCRYPT_CRYPT_MOD_H
+#define MUTT_NCRYPT_CRYPT_MOD_H
 
 #include <stdbool.h>
 #include <stdio.h>
+#include "ncrypt.h"
 
 struct Address;
+struct AddressList;
 struct Body;
 struct Envelope;
-struct Header;
+struct Email;
 struct State;
 
 /**
@@ -51,23 +54,23 @@ struct CryptModuleSpecs
   void         (*void_passphrase)(void);
   /**
    * valid_passphrase - Ensure we have a valid passphrase
-   * @retval 1 Success
-   * @retval 0 Failed
+   * @retval true  Success
+   * @retval false Failed
    *
    * If the passphrase is within the expiry time (backend-specific), use it.
    * If not prompt the user again.
    */
-  int          (*valid_passphrase)(void);
+  bool         (*valid_passphrase)(void);
   /**
    * decrypt_mime - Decrypt an encrypted MIME part
-   * @param[in]  fpin  File containing the encrypted part
-   * @param[out] fpout File containing the decrypted part
-   * @param[in]  b     Body of the email
-   * @param[out] cur   Body containing the decrypted part
+   * @param[in]  fp_in  File containing the encrypted part
+   * @param[out] fp_out File containing the decrypted part
+   * @param[in]  b      Body of the email
+   * @param[out] cur    Body containing the decrypted part
    * @retval  0 Success
    * @retval -1 Failure
    */
-  int          (*decrypt_mime)(FILE *fpin, FILE **fpout, struct Body *b, struct Body **cur);
+  int          (*decrypt_mime)(FILE *fp_in, FILE **fp_out, struct Body *b, struct Body **cur);
   /**
    * application_handler - Manage the MIME type "application/pgp" or "application/smime"
    * @param m Body of the email
@@ -94,7 +97,7 @@ struct CryptModuleSpecs
    * If oppenc_mode is true, only keys that can be determined without prompting
    * will be used.
    */
-  char *       (*find_keys)(struct Address *addrlist, bool oppenc_mode);
+  char *       (*find_keys)(struct AddressList *addrlist, bool oppenc_mode);
   /**
    * sign_message - Cryptographically sign the Body of a message
    * @param a Body of the message
@@ -113,10 +116,10 @@ struct CryptModuleSpecs
   int          (*verify_one)(struct Body *sigbdy, struct State *s, const char *tempf);
   /**
    * send_menu - Ask the user whether to sign and/or encrypt the email
-   * @param msg Header of the email
-   * @retval num Flags, e.g. #APPLICATION_PGP | #ENCRYPT
+   * @param e Email
+   * @retval num Flags, e.g. #APPLICATION_PGP | #SEC_ENCRYPT
    */
-  int          (*send_menu)(struct Header *msg);
+  int          (*send_menu)(struct Email *e);
   /**
    * set_sender - Set the sender of the email
    * @param sender Email address
@@ -152,12 +155,12 @@ struct CryptModuleSpecs
   /**
    * pgp_traditional_encryptsign - Create an inline PGP encrypted, signed email
    * @param a       Body of the email
-   * @param flags   Flags, e.g. #ENCRYPT
+   * @param flags   Flags, see #SecurityFlags
    * @param keylist List of keys to encrypt to (space-separated)
    * @retval ptr  New encrypted/siged Body
    * @retval NULL Error
    */
-  struct Body *(*pgp_traditional_encryptsign)(struct Body *a, int flags, char *keylist);
+  struct Body *(*pgp_traditional_encryptsign)(struct Body *a, SecurityFlags flags, char *keylist);
   /**
    * pgp_invoke_getkeys - Run a command to download a PGP key
    * @param addr Address to search for
@@ -182,11 +185,12 @@ struct CryptModuleSpecs
   void         (*smime_getkeys)(struct Envelope *env);
   /**
    * smime_verify_sender - Does the sender match the certificate?
-   * @param h Header of the email
+   * @param m Mailbox
+   * @param e Email
    * @retval 0 Success
    * @retval 1 Failure
    */
-  int          (*smime_verify_sender)(struct Header *h);
+  int          (*smime_verify_sender)(struct Mailbox *m, struct Email *e);
   /**
    * smime_build_smime_entity - Encrypt the email body to all recipients
    * @param a        Body of email
@@ -207,4 +211,4 @@ struct CryptModuleSpecs
 void crypto_module_register(struct CryptModuleSpecs *specs);
 struct CryptModuleSpecs *crypto_module_lookup(int identifier);
 
-#endif /* _NCRYPT_CRYPT_MOD_H */
+#endif /* MUTT_NCRYPT_CRYPT_MOD_H */

@@ -32,10 +32,11 @@
 #include "config.h"
 #include <stddef.h>
 #include <depot.h>
+#include <stdbool.h>
 #include <villa.h>
 #include "mutt/mutt.h"
 #include "backend.h"
-#include "options.h"
+#include "globals.h"
 
 /**
  * hcache_qdbm_open - Implements HcacheOps::open()
@@ -44,7 +45,7 @@ static void *hcache_qdbm_open(const char *path)
 {
   int flags = VL_OWRITER | VL_OCREAT;
 
-  if (HeaderCacheCompress)
+  if (C_HeaderCacheCompress)
     flags |= VL_OZCOMP;
 
   return vlopen(path, flags, VL_CMPLEX);
@@ -86,9 +87,9 @@ static int hcache_qdbm_store(void *ctx, const char *key, size_t keylen, void *da
 }
 
 /**
- * hcache_qdbm_delete - Implements HcacheOps::delete()
+ * hcache_qdbm_delete_header - Implements HcacheOps::delete_header()
  */
-static int hcache_qdbm_delete(void *ctx, const char *key, size_t keylen)
+static int hcache_qdbm_delete_header(void *ctx, const char *key, size_t keylen)
 {
   if (!ctx)
     return -1;
@@ -103,13 +104,14 @@ static int hcache_qdbm_delete(void *ctx, const char *key, size_t keylen)
 /**
  * hcache_qdbm_close - Implements HcacheOps::close()
  */
-static void hcache_qdbm_close(void **ctx)
+static void hcache_qdbm_close(void **ptr)
 {
-  if (!ctx || !*ctx)
+  if (!ptr || !*ptr)
     return;
 
-  VILLA *db = *ctx;
+  VILLA *db = *ptr;
   vlclose(db);
+  *ptr = NULL;
 }
 
 /**

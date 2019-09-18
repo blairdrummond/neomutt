@@ -28,24 +28,18 @@
 
 #include "config.h"
 #include <ctype.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include <time.h>
 #include "date.h"
 #include "logging.h"
 #include "memory.h"
 #include "string2.h"
 
-/* theoretically time_t can be float but it is integer on most (if not all) systems */
-#define TIME_T_MAX ((((time_t) 1 << (sizeof(time_t) * 8 - 2)) - 1) * 2 + 1)
-#define TIME_T_MIN (-TIME_T_MAX - 1)
-#define TM_YEAR_MAX                                                            \
-  (1970 + (((((TIME_T_MAX - 59) / 60) - 59) / 60) - 23) / 24 / 366)
-#define TM_YEAR_MIN (1970 - (TM_YEAR_MAX - 1970) - 1)
-
 // clang-format off
-
 /**
  * Weekdays - Day of the week (abbreviated)
  */
@@ -124,18 +118,16 @@ static const struct Tz TimeZones[] = {
  * @param utc UTC time
  * @retval num Seconds east of UTC
  *
-  * returns the seconds east of UTC given 'g' and its corresponding gmtime()
+ * returns the seconds east of UTC given 'g' and its corresponding gmtime()
  * representation
  */
 static time_t compute_tz(time_t g, struct tm *utc)
 {
-  struct tm *lt = localtime(&g);
-  time_t t;
-  int yday;
+  struct tm lt = mutt_date_localtime(g);
 
-  t = (((lt->tm_hour - utc->tm_hour) * 60) + (lt->tm_min - utc->tm_min)) * 60;
+  time_t t = (((lt.tm_hour - utc->tm_hour) * 60) + (lt.tm_min - utc->tm_min)) * 60;
 
-  yday = (lt->tm_yday - utc->tm_yday);
+  int yday = (lt.tm_yday - utc->tm_yday);
   if (yday != 0)
   {
     /* This code is optimized to negative timezones (West of Greenwich) */
@@ -164,7 +156,7 @@ static int is_leap_year_feb(struct tm *tm)
     return 0;
 
   int y = tm->tm_year + 1900;
-  return (((y & 3) == 0) && (((y % 100) != 0) || ((y % 400) == 0)));
+  return ((y & 3) == 0) && (((y % 100) != 0) || ((y % 400) == 0));
 }
 
 /**
@@ -192,7 +184,7 @@ static const char *uncomment_timezone(char *buf, size_t buflen, const char *tz)
     return tz;
   len = p - tz;
   if (len > (buflen - 1))
-    len = buflen - 1;
+    len = buflen - 1; /* LCOV_EXCL_LINE */
   memcpy(buf, tz, len);
   buf[len] = '\0';
   return buf;
@@ -212,37 +204,33 @@ time_t mutt_date_local_tz(time_t t)
   if ((t == TIME_T_MAX) || (t == TIME_T_MIN))
     return 0;
 
-  struct tm *ptm = NULL;
-  struct tm utc;
+  if (t == 0)
+    t = mutt_date_epoch();
 
-  if (!t)
-    t = time(NULL);
-  ptm = gmtime(&t);
-  /* need to make a copy because gmtime/localtime return a pointer to
-     static memory (grr!) */
-  memcpy(&utc, ptm, sizeof(utc));
-  return (compute_tz(t, &utc));
+  struct tm tm = mutt_date_gmtime(t);
+  return compute_tz(t, &tm);
 }
 
 /**
  * mutt_date_make_time - Convert `struct tm` to `time_t`
  * @param t     Time to convert
  * @param local Should the local timezone be considered
- * @retval num Time in Unix format
+ * @retval num        Time in Unix format
+ * @retval TIME_T_MIN Error
  *
  * Convert a struct tm to time_t, but don't take the local timezone into
- * account unless ``local'' is nonzero
+ * account unless "local" is nonzero
  */
-time_t mutt_date_make_time(struct tm *t, int local)
+time_t mutt_date_make_time(struct tm *t, bool local)
 {
-  time_t g;
+  if (!t)
+    return TIME_T_MIN;
 
   static const int AccumDaysPerMonth[mutt_array_size(Months)] = {
     0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334,
   };
 
-  /* Prevent an integer overflow.
-   * The time_t cast is an attempt to silence a clang range warning. */
+  /* Prevent an integer overflow. */
   if ((time_t) t->tm_year > (TM_YEAR_MAX - 1900))
     return TIME_T_MAX;
   if ((time_t) t->tm_year < (TM_YEAR_MIN - 1900))
@@ -259,12 +247,12 @@ time_t mutt_date_make_time(struct tm *t, int local)
     return TIME_T_MAX;
 
   /* Compute the number of days since January 1 in the same year */
-  g = AccumDaysPerMonth[t->tm_mon % mutt_array_size(Months)];
+  time_t g = AccumDaysPerMonth[t->tm_mon % mutt_array_size(Months)];
 
   /* The leap years are 1972 and every 4. year until 2096,
    * but this algorithm will fail after year 2099 */
   g += t->tm_mday;
-  if ((t->tm_year % 4) || t->tm_mon < 2)
+  if ((t->tm_year % 4) || (t->tm_mon < 2))
     g--;
   t->tm_yday = g;
 
@@ -301,6 +289,9 @@ time_t mutt_date_make_time(struct tm *t, int local)
  */
 void mutt_date_normalize_time(struct tm *tm)
 {
+  if (!tm)
+    return;
+
   static const char DaysPerMonth[mutt_array_size(Months)] = {
     31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
   };
@@ -379,15 +370,18 @@ void mutt_date_normalize_time(struct tm *tm)
  */
 char *mutt_date_make_date(char *buf, size_t buflen)
 {
-  time_t t = time(NULL);
-  struct tm *l = localtime(&t);
+  if (!buf)
+    return NULL;
+
+  time_t t = mutt_date_epoch();
+  struct tm tm = mutt_date_localtime(t);
   time_t tz = mutt_date_local_tz(t);
 
   tz /= 60;
 
   snprintf(buf, buflen, "Date: %s, %d %s %d %02d:%02d:%02d %+03d%02d\n",
-           Weekdays[l->tm_wday], l->tm_mday, Months[l->tm_mon], l->tm_year + 1900,
-           l->tm_hour, l->tm_min, l->tm_sec, (int) tz / 60, (int) abs((int) tz) % 60);
+           Weekdays[tm.tm_wday], tm.tm_mday, Months[tm.tm_mon], tm.tm_year + 1900,
+           tm.tm_hour, tm.tm_min, tm.tm_sec, (int) tz / 60, (int) abs((int) tz) % 60);
   return buf;
 }
 
@@ -403,10 +397,32 @@ char *mutt_date_make_date(char *buf, size_t buflen)
 int mutt_date_check_month(const char *s)
 {
   for (int i = 0; i < mutt_array_size(Months); i++)
-    if (mutt_str_strncasecmp(s, Months[i], 3) == 0)
+    if (mutt_str_startswith(s, Months[i], CASE_IGNORE))
       return i;
 
   return -1; /* error */
+}
+
+/**
+ * mutt_date_epoch - Return the number of seconds since the Unix epoch
+ * @retval s The number of s since the Unix epoch, or 0 on failure
+ */
+time_t mutt_date_epoch(void)
+{
+  return mutt_date_epoch_ms() / 1000;
+}
+
+/**
+ * mutt_date_epoch_ms - Return the number of milliseconds since the Unix epoch
+ * @retval ms The number of ms since the Unix epoch, or 0 on failure
+ */
+size_t mutt_date_epoch_ms(void)
+{
+  struct timeval tv = { 0, 0 };
+  gettimeofday(&tv, NULL);
+  /* We assume that gettimeofday doesn't modify its first argument on failure.
+   * We also kind of assume that gettimeofday does not fail. */
+  return tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
 /**
@@ -419,11 +435,11 @@ int mutt_date_check_month(const char *s)
  */
 bool mutt_date_is_day_name(const char *s)
 {
-  if ((strlen(s) < 3) || !*(s + 3) || !ISSPACE(*(s + 3)))
+  if (!s || (strlen(s) < 3) || (s[3] == '\0') || !IS_SPACE(s[3]))
     return false;
 
   for (int i = 0; i < mutt_array_size(Weekdays); i++)
-    if (mutt_str_strncasecmp(s, Weekdays[i], 3) == 0)
+    if (mutt_str_startswith(s, Weekdays[i], CASE_IGNORE))
       return true;
 
   return false;
@@ -442,21 +458,23 @@ bool mutt_date_is_day_name(const char *s)
  */
 time_t mutt_date_parse_date(const char *s, struct Tz *tz_out)
 {
+  if (!s)
+    return -1;
+
   int count = 0;
   int hour, min, sec;
-  struct tm tm;
+  struct tm tm = { 0 };
   int i;
   int tz_offset = 0;
   int zhours = 0;
   int zminutes = 0;
   bool zoccident = false;
   const char *ptz = NULL;
-  char tzstr[SHORT_STRING];
-  char scratch[SHORT_STRING];
+  char tzstr[128];
+  char scratch[128];
 
   /* Don't modify our argument. Fixed-size buffer is ok here since
-   * the date format imposes a natural limit.
-   */
+   * the date format imposes a natural limit.  */
 
   mutt_str_strfcpy(scratch, s, sizeof(scratch));
 
@@ -468,9 +486,7 @@ time_t mutt_date_parse_date(const char *s, struct Tz *tz_out)
     t = scratch;
   t = mutt_str_skip_email_wsp(t);
 
-  memset(&tm, 0, sizeof(tm));
-
-  while ((t = strtok(t, " \t")) != NULL)
+  while ((t = strtok(t, " \t")))
   {
     switch (count)
     {
@@ -506,7 +522,7 @@ time_t mutt_date_parse_date(const char *s, struct Tz *tz_out)
           sec = 0;
         else
         {
-          mutt_debug(1, "could not process time format: %s\n", t);
+          mutt_debug(LL_DEBUG1, "could not process time format: %s\n", t);
           return -1;
         }
         if ((hour < 0) || (hour > 23) || (min < 0) || (min > 59) || (sec < 0) || (sec > 60))
@@ -518,13 +534,12 @@ time_t mutt_date_parse_date(const char *s, struct Tz *tz_out)
 
       case 4: /* timezone */
         /* sometimes we see things like (MST) or (-0700) so attempt to
-         * compensate by uncommenting the string if non-RFC822 compliant
-         */
+         * compensate by uncommenting the string if non-RFC822 compliant */
         ptz = uncomment_timezone(tzstr, sizeof(tzstr), t);
 
-        if (*ptz == '+' || *ptz == '-')
+        if ((*ptz == '+') || (*ptz == '-'))
         {
-          if (ptz[1] && ptz[2] && ptz[3] && ptz[4] &&
+          if ((ptz[1] != '\0') && (ptz[2] != '\0') && (ptz[3] != '\0') && (ptz[4] != '\0') &&
               isdigit((unsigned char) ptz[1]) && isdigit((unsigned char) ptz[2]) &&
               isdigit((unsigned char) ptz[3]) && isdigit((unsigned char) ptz[4]))
           {
@@ -571,7 +586,7 @@ time_t mutt_date_parse_date(const char *s, struct Tz *tz_out)
 
   if (count < 4) /* don't check for missing timezone */
   {
-    mutt_debug(1, "error parsing date format, using received time\n");
+    mutt_debug(LL_DEBUG1, "error parsing date format, using received time\n");
     return -1;
   }
 
@@ -582,7 +597,7 @@ time_t mutt_date_parse_date(const char *s, struct Tz *tz_out)
     tz_out->zoccident = zoccident;
   }
 
-  time_t time = mutt_date_make_time(&tm, 0);
+  time_t time = mutt_date_make_time(&tm, false);
   /* Check we haven't overflowed the time (on 32-bit arches) */
   if ((time != TIME_T_MAX) && (time != TIME_T_MIN))
     time += tz_offset;
@@ -601,14 +616,17 @@ time_t mutt_date_parse_date(const char *s, struct Tz *tz_out)
  */
 int mutt_date_make_imap(char *buf, size_t buflen, time_t timestamp)
 {
-  struct tm *tm = localtime(&timestamp);
+  if (!buf)
+    return -1;
+
+  struct tm tm = mutt_date_localtime(timestamp);
   time_t tz = mutt_date_local_tz(timestamp);
 
   tz /= 60;
 
-  return snprintf(buf, buflen, "%02d-%s-%d %02d:%02d:%02d %+03d%02d", tm->tm_mday,
-                  Months[tm->tm_mon], tm->tm_year + 1900, tm->tm_hour, tm->tm_min,
-                  tm->tm_sec, (int) tz / 60, (int) abs((int) tz) % 60);
+  return snprintf(buf, buflen, "%02d-%s-%d %02d:%02d:%02d %+03d%02d",
+                  tm.tm_mday, Months[tm.tm_mon], tm.tm_year + 1900, tm.tm_hour,
+                  tm.tm_min, tm.tm_sec, (int) tz / 60, (int) abs((int) tz) % 60);
 }
 
 /**
@@ -624,10 +642,13 @@ int mutt_date_make_imap(char *buf, size_t buflen, time_t timestamp)
  */
 int mutt_date_make_tls(char *buf, size_t buflen, time_t timestamp)
 {
-  struct tm *tm = gmtime(&timestamp);
+  if (!buf)
+    return -1;
+
+  struct tm tm = mutt_date_gmtime(timestamp);
   return snprintf(buf, buflen, "%s, %d %s %d %02d:%02d:%02d UTC",
-                  Weekdays[tm->tm_wday], tm->tm_mday, Months[tm->tm_mon],
-                  tm->tm_year + 1900, tm->tm_hour, tm->tm_min, tm->tm_sec);
+                  Weekdays[tm.tm_wday], tm.tm_mday, Months[tm.tm_mon],
+                  tm.tm_year + 1900, tm.tm_hour, tm.tm_min, tm.tm_sec);
 }
 
 /**
@@ -636,12 +657,15 @@ int mutt_date_make_tls(char *buf, size_t buflen, time_t timestamp)
  * @retval num Unix time
  * @retval 0   Error
  */
-time_t mutt_date_parse_imap(char *s)
+time_t mutt_date_parse_imap(const char *s)
 {
+  if (!s)
+    return 0;
+
   struct tm t;
   time_t tz;
 
-  t.tm_mday = (s[0] == ' ' ? s[1] - '0' : (s[0] - '0') * 10 + (s[1] - '0'));
+  t.tm_mday = ((s[0] == ' ') ? s[1] - '0' : (s[0] - '0') * 10 + (s[1] - '0'));
   s += 2;
   if (*s != '-')
     return 0;
@@ -680,7 +704,7 @@ time_t mutt_date_parse_imap(char *s)
   if (s[0] == '+')
     tz = -tz;
 
-  return (mutt_date_make_time(&t, 0) + tz);
+  return mutt_date_make_time(&t, false) + tz;
 }
 
 /**
@@ -699,5 +723,71 @@ time_t mutt_date_add_timeout(time_t now, long timeout)
   if ((TIME_T_MAX - now) < timeout)
     return TIME_T_MAX;
 
-  return (now + timeout);
+  return now + timeout;
+}
+
+/**
+ * mutt_date_localtime - Converts calendar time to a broken-down time structure expressed in user timezone
+ * @param  t  Time
+ * @retval obj Broken-down time representation
+ *
+ * Uses current time if t is #MUTT_DATE_NOW
+ */
+struct tm mutt_date_localtime(time_t t)
+{
+  struct tm tm = { 0 };
+
+  if (t == MUTT_DATE_NOW)
+    t = mutt_date_epoch();
+
+  localtime_r(&t, &tm);
+  return tm;
+}
+
+/**
+ * mutt_date_gmtime - Converts calendar time to a broken-down time structure expressed in UTC timezone
+ * @param  t  Time
+ * @retval obj Broken-down time representation
+ *
+ * Uses current time if t is #MUTT_DATE_NOW
+ */
+struct tm mutt_date_gmtime(time_t t)
+{
+  struct tm tm = { 0 };
+
+  if (t == MUTT_DATE_NOW)
+    t = mutt_date_epoch();
+
+  gmtime_r(&t, &tm);
+  return tm;
+}
+
+/**
+ * mutt_date_localtime_format - Format localtime
+ * @param buf    Buffer to store formatted time
+ * @param buflen Buffer size
+ * @param format Format to apply
+ * @param t      Time to format
+ * @retval num   Number of Bytes added to buffer, excluding null byte.
+ */
+size_t mutt_date_localtime_format(char *buf, size_t buflen, const char *format, time_t t)
+{
+  if (!buf || !format)
+    return 0;
+
+  struct tm tm = mutt_date_localtime(t);
+  return strftime(buf, buflen, format, &tm);
+}
+
+/**
+ * mutt_date_sleep_ms - Sleep for milliseconds
+ * @param ms Number of milliseconds to sleep
+ */
+void mutt_date_sleep_ms(size_t ms)
+{
+  const struct timespec sleep = {
+    .tv_sec = ms / 1000,
+    .tv_nsec = (ms % 1000) * 1000000UL,
+  };
+  nanosleep(&sleep, NULL);
 }

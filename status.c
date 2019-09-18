@@ -30,29 +30,30 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include "mutt/mutt.h"
+#include "config/lib.h"
+#include "core/lib.h"
 #include "context.h"
 #include "format_flags.h"
 #include "globals.h"
-#include "mbtable.h"
-#include "mutt_curses.h"
+#include "mutt_mailbox.h"
 #include "mutt_menu.h"
 #include "mutt_window.h"
-#include "mx.h"
+#include "muttlib.h"
 #include "options.h"
 #include "protos.h"
 #include "sort.h"
-#ifdef USE_NOTMUCH
-#include "mutt_notmuch.h"
-#endif
+
+/* These Config Variables are only used in status.c */
+struct MbTable *C_StatusChars; ///< Config: Indicator characters for the status bar
 
 /**
  * get_sort_str - Get the sort method as a string
  * @param buf    Buffer for the sort string
- * @param buflen Length of the bufer
- * @param method Sort method, e.g. #SORT_DATE
+ * @param buflen Length of the buffer
+ * @param method Sort method, see #SortType
  * @retval ptr Buffer pointer
  */
-static char *get_sort_str(char *buf, size_t buflen, int method)
+static char *get_sort_str(char *buf, size_t buflen, enum SortType method)
 {
   snprintf(buf, buflen, "%s%s%s", (method & SORT_REVERSE) ? "reverse-" : "",
            (method & SORT_LAST) ? "last-" : "",
@@ -60,35 +61,19 @@ static char *get_sort_str(char *buf, size_t buflen, int method)
   return buf;
 }
 
-static void status_line(char *buf, size_t buflen, size_t col, int cols,
-                        struct Menu *menu, const char *p);
-
 /**
- * status_format_str - Create the status bar string
- * @param[out] buf      Buffer in which to save string
- * @param[in]  buflen   Buffer length
- * @param[in]  col      Starting column
- * @param[in]  cols     Number of screen columns
- * @param[in]  op       printf-like operator, e.g. 't'
- * @param[in]  src      printf-like format string
- * @param[in]  prec     Field precision, e.g. "-3.4"
- * @param[in]  if_str   If condition is met, display this string
- * @param[in]  else_str Otherwise, display this string
- * @param[in]  data     Pointer to the mailbox Context
- * @param[in]  flags    Format flags
- * @retval src (unchanged)
- *
- * status_format_str() is a callback function for mutt_expando_format().
+ * status_format_str - Create the status bar string - Implements ::format_t
  *
  * | Expando | Description
  * |:--------|:--------------------------------------------------------
  * | \%b     | Number of incoming folders with unread messages
+ * | \%D     | Description of the mailbox
  * | \%d     | Number of deleted messages
  * | \%f     | Full mailbox path
  * | \%F     | Number of flagged messages
  * | \%h     | Hostname
  * | \%l     | Length of mailbox (in bytes)
- * | \%L     | Size (in bytes) of the messages shown
+ * | \%L     | Size (in bytes) of the messages shown (or limited)
  * | \%M     | Number of messages shown (virtual message count when limiting)
  * | \%m     | Total number of messages
  * | \%n     | Number of new messages
@@ -97,8 +82,8 @@ static void status_line(char *buf, size_t buflen, size_t col, int cols,
  * | \%P     | Percent of way through index
  * | \%R     | Number of read messages
  * | \%r     | Readonly/wontwrite/changed flag
- * | \%S     | Current aux sorting method ($sort_aux)
- * | \%s     | Current sorting method ($sort)
+ * | \%S     | Current aux sorting method (`$sort_aux`)
+ * | \%s     | Current sorting method (`$sort`)
  * | \%t     | # of tagged messages
  * | \%u     | Number of unread messages
  * | \%V     | Currently active limit pattern
@@ -107,54 +92,69 @@ static void status_line(char *buf, size_t buflen, size_t col, int cols,
 static const char *status_format_str(char *buf, size_t buflen, size_t col, int cols,
                                      char op, const char *src, const char *prec,
                                      const char *if_str, const char *else_str,
-                                     unsigned long data, enum FormatFlag flags)
+                                     unsigned long data, MuttFormatFlags flags)
 {
-  char fmt[SHORT_STRING], tmp[SHORT_STRING], *cp = NULL;
-  int count, optional = (flags & MUTT_FORMAT_OPTIONAL);
+  char fmt[128], tmp[128];
+  bool optional = (flags & MUTT_FORMAT_OPTIONAL);
   struct Menu *menu = (struct Menu *) data;
 
-  *buf = 0;
+  *buf = '\0';
   switch (op)
   {
     case 'b':
       if (!optional)
       {
         snprintf(fmt, sizeof(fmt), "%%%sd", prec);
-        snprintf(buf, buflen, fmt, mutt_buffy_check(false));
+        snprintf(buf, buflen, fmt,
+                 mutt_mailbox_check(Context ? Context->mailbox : NULL, 0));
       }
-      else if (mutt_buffy_check(false) == 0)
-        optional = 0;
+      else if (mutt_mailbox_check(Context ? Context->mailbox : NULL, 0) == 0)
+        optional = false;
       break;
 
     case 'd':
       if (!optional)
       {
         snprintf(fmt, sizeof(fmt), "%%%sd", prec);
-        snprintf(buf, buflen, fmt, Context ? Context->deleted : 0);
+        snprintf(buf, buflen, fmt,
+                 (Context && Context->mailbox) ? Context->mailbox->msg_deleted : 0);
       }
-      else if (!Context || !Context->deleted)
-        optional = 0;
+      else if (!Context || !Context->mailbox || (Context->mailbox->msg_deleted == 0))
+        optional = false;
       break;
 
+    case 'D':
+    {
+      struct Mailbox *m = Context ? Context->mailbox : NULL;
+      // If there's a descriptive name, use it. Otherwise, fall-through
+      if (m && m->name)
+      {
+        mutt_str_strfcpy(tmp, m->name, sizeof(tmp));
+        snprintf(fmt, sizeof(fmt), "%%%ss", prec);
+        snprintf(buf, buflen, fmt, tmp);
+        break;
+      }
+    }
+    /* fallthrough */
     case 'f':
     {
-#ifdef USE_NOTMUCH
-      char *p = NULL;
-      if (Context && Context->magic == MUTT_NOTMUCH && (p = nm_get_description(Context)))
-        mutt_str_strfcpy(tmp, p, sizeof(tmp));
-      else
-#endif
+      struct Mailbox *m = Context ? Context->mailbox : NULL;
+
 #ifdef USE_COMPRESSED
-          if (Context && Context->compress_info && Context->realpath)
+      if (m && m->compress_info && (m->realpath[0] != '\0'))
       {
-        mutt_str_strfcpy(tmp, Context->realpath, sizeof(tmp));
+        mutt_str_strfcpy(tmp, m->realpath, sizeof(tmp));
         mutt_pretty_mailbox(tmp, sizeof(tmp));
       }
       else
 #endif
-          if (Context && Context->path)
+          if (m && (m->magic == MUTT_NOTMUCH) && m->name)
       {
-        mutt_str_strfcpy(tmp, Context->path, sizeof(tmp));
+        mutt_str_strfcpy(tmp, m->name, sizeof(tmp));
+      }
+      else if (m && !mutt_buffer_is_empty(&m->pathbuf))
+      {
+        mutt_str_strfcpy(tmp, mailbox_path(m), sizeof(tmp));
         mutt_pretty_mailbox(tmp, sizeof(tmp));
       }
       else
@@ -168,10 +168,11 @@ static const char *status_format_str(char *buf, size_t buflen, size_t col, int c
       if (!optional)
       {
         snprintf(fmt, sizeof(fmt), "%%%sd", prec);
-        snprintf(buf, buflen, fmt, Context ? Context->flagged : 0);
+        snprintf(buf, buflen, fmt,
+                 (Context && Context->mailbox) ? Context->mailbox->msg_flagged : 0);
       }
-      else if (!Context || !Context->flagged)
-        optional = 0;
+      else if (!Context || !Context->mailbox || (Context->mailbox->msg_flagged == 0))
+        optional = false;
       break;
 
     case 'h':
@@ -183,11 +184,12 @@ static const char *status_format_str(char *buf, size_t buflen, size_t col, int c
       if (!optional)
       {
         snprintf(fmt, sizeof(fmt), "%%%ss", prec);
-        mutt_str_pretty_size(tmp, sizeof(tmp), Context ? Context->size : 0);
+        mutt_str_pretty_size(tmp, sizeof(tmp),
+                             (Context && Context->mailbox) ? Context->mailbox->size : 0);
         snprintf(buf, buflen, fmt, tmp);
       }
-      else if (!Context || !Context->size)
-        optional = 0;
+      else if (!Context || !Context->mailbox || !Context->mailbox->size)
+        optional = false;
       break;
 
     case 'L':
@@ -198,153 +200,169 @@ static const char *status_format_str(char *buf, size_t buflen, size_t col, int c
         snprintf(buf, buflen, fmt, tmp);
       }
       else if (!Context || !Context->pattern)
-        optional = 0;
+        optional = false;
       break;
 
     case 'm':
       if (!optional)
       {
         snprintf(fmt, sizeof(fmt), "%%%sd", prec);
-        snprintf(buf, buflen, fmt, Context ? Context->msgcount : 0);
+        snprintf(buf, buflen, fmt,
+                 (Context && Context->mailbox) ? Context->mailbox->msg_count : 0);
       }
-      else if (!Context || !Context->msgcount)
-        optional = 0;
+      else if (!Context || !Context->mailbox || (Context->mailbox->msg_count == 0))
+        optional = false;
       break;
 
     case 'M':
       if (!optional)
       {
         snprintf(fmt, sizeof(fmt), "%%%sd", prec);
-        snprintf(buf, buflen, fmt, Context ? Context->vcount : 0);
+        snprintf(buf, buflen, fmt,
+                 (Context && Context->mailbox) ? Context->mailbox->vcount : 0);
       }
       else if (!Context || !Context->pattern)
-        optional = 0;
+        optional = false;
       break;
 
     case 'n':
       if (!optional)
       {
         snprintf(fmt, sizeof(fmt), "%%%sd", prec);
-        snprintf(buf, buflen, fmt, Context ? Context->new : 0);
+        snprintf(buf, buflen, fmt,
+                 (Context && Context->mailbox) ? Context->mailbox->msg_new : 0);
       }
-      else if (!Context || !Context->new)
-        optional = 0;
+      else if (!Context || !Context->mailbox || (Context->mailbox->msg_new == 0))
+        optional = false;
       break;
 
     case 'o':
       if (!optional)
       {
         snprintf(fmt, sizeof(fmt), "%%%sd", prec);
-        snprintf(buf, buflen, fmt, Context ? Context->unread - Context->new : 0);
+        snprintf(buf, buflen, fmt,
+                 (Context && Context->mailbox) ?
+                     (Context->mailbox->msg_unread - Context->mailbox->msg_new) :
+                     0);
       }
-      else if (!Context || !(Context->unread - Context->new))
-        optional = 0;
+      else if (!Context || !Context->mailbox ||
+               ((Context->mailbox->msg_unread - Context->mailbox->msg_new) == 0))
+        optional = false;
       break;
 
     case 'p':
-      count = mutt_num_postponed(0);
+    {
+      int count = mutt_num_postponed(Context ? Context->mailbox : NULL, false);
       if (!optional)
       {
         snprintf(fmt, sizeof(fmt), "%%%sd", prec);
         snprintf(buf, buflen, fmt, count);
       }
-      else if (!count)
-        optional = 0;
+      else if (count == 0)
+        optional = false;
       break;
+    }
 
     case 'P':
+    {
       if (!menu)
         break;
+      char *cp = NULL;
       if (menu->top + menu->pagelen >= menu->max)
       {
         cp = menu->top ?
-          /* L10N: Status bar message: the end of the list emails is visible in the index */
-          _("end") :
-          /* L10N: Status bar message: all the emails are visible in the index */
-          _("all");
+                 /* L10N: Status bar message: the end of the list emails is visible in the index */
+                 _("end") :
+                 /* L10N: Status bar message: all the emails are visible in the index */
+                 _("all");
       }
       else
       {
-        count = (100 * (menu->top + menu->pagelen)) / menu->max;
+        int count = (100 * (menu->top + menu->pagelen)) / menu->max;
         snprintf(tmp, sizeof(tmp), "%d%%", count);
         cp = tmp;
       }
       snprintf(fmt, sizeof(fmt), "%%%ss", prec);
       snprintf(buf, buflen, fmt, cp);
       break;
+    }
 
     case 'r':
     {
       size_t i = 0;
 
-      if (Context)
+      if (Context && Context->mailbox)
       {
-        i = OptAttachMsg ? 3 :
-                           ((Context->readonly || Context->dontwrite) ?
-                                2 :
-                                (Context->changed ||
-                                 /* deleted doesn't necessarily mean changed in IMAP */
-                                 (Context->magic != MUTT_IMAP && Context->deleted)) ?
-                                1 :
-                                0);
+        i = OptAttachMsg ?
+                3 :
+                ((Context->mailbox->readonly || Context->mailbox->dontwrite) ?
+                     2 :
+                     (Context->mailbox->changed ||
+                      /* deleted doesn't necessarily mean changed in IMAP */
+                      (Context->mailbox->magic != MUTT_IMAP && Context->mailbox->msg_deleted)) ?
+                     1 :
+                     0);
       }
 
-      if (!StatusChars || !StatusChars->len)
-        buf[0] = 0;
-      else if (i >= StatusChars->len)
-        snprintf(buf, buflen, "%s", StatusChars->chars[0]);
+      if (!C_StatusChars || !C_StatusChars->len)
+        buf[0] = '\0';
+      else if (i >= C_StatusChars->len)
+        snprintf(buf, buflen, "%s", C_StatusChars->chars[0]);
       else
-        snprintf(buf, buflen, "%s", StatusChars->chars[i]);
+        snprintf(buf, buflen, "%s", C_StatusChars->chars[i]);
       break;
     }
 
     case 'R':
     {
-      int read = Context ? Context->msgcount - Context->unread : 0;
+      int read = (Context && Context->mailbox) ?
+                     (Context->mailbox->msg_count - Context->mailbox->msg_unread) :
+                     0;
 
       if (!optional)
       {
         snprintf(fmt, sizeof(fmt), "%%%sd", prec);
         snprintf(buf, buflen, fmt, read);
       }
-      else if (!read)
-        optional = 0;
+      else if (read == 0)
+        optional = false;
       break;
     }
 
     case 's':
       snprintf(fmt, sizeof(fmt), "%%%ss", prec);
-      snprintf(buf, buflen, fmt, get_sort_str(tmp, sizeof(tmp), Sort));
+      snprintf(buf, buflen, fmt, get_sort_str(tmp, sizeof(tmp), C_Sort));
       break;
 
     case 'S':
       snprintf(fmt, sizeof(fmt), "%%%ss", prec);
-      snprintf(buf, buflen, fmt, get_sort_str(tmp, sizeof(tmp), SortAux));
+      snprintf(buf, buflen, fmt, get_sort_str(tmp, sizeof(tmp), C_SortAux));
       break;
 
     case 't':
       if (!optional)
       {
         snprintf(fmt, sizeof(fmt), "%%%sd", prec);
-        snprintf(buf, buflen, fmt, Context ? Context->tagged : 0);
+        snprintf(buf, buflen, fmt,
+                 (Context && Context->mailbox) ? Context->mailbox->msg_tagged : 0);
       }
-      else if (!Context || !Context->tagged)
-        optional = 0;
+      else if (!Context || !Context->mailbox || (Context->mailbox->msg_tagged == 0))
+        optional = false;
       break;
 
     case 'u':
       if (!optional)
       {
         snprintf(fmt, sizeof(fmt), "%%%sd", prec);
-        snprintf(buf, buflen, fmt, Context ? Context->unread : 0);
+        snprintf(buf, buflen, fmt,
+                 (Context && Context->mailbox) ? Context->mailbox->msg_unread : 0);
       }
-      else if (!Context || !Context->unread)
-        optional = 0;
+      else if (!Context || !Context->mailbox || (Context->mailbox->msg_unread == 0))
+        optional = false;
       break;
 
     case 'v':
-      snprintf(fmt, sizeof(fmt), "NeoMutt %%s%%s");
-      snprintf(buf, buflen, fmt, PACKAGE_VERSION, GitVer);
+      snprintf(buf, buflen, "%s", mutt_make_version());
       break;
 
     case 'V':
@@ -354,11 +372,11 @@ static const char *status_format_str(char *buf, size_t buflen, size_t col, int c
         snprintf(buf, buflen, fmt, (Context && Context->pattern) ? Context->pattern : "");
       }
       else if (!Context || !Context->pattern)
-        optional = 0;
+        optional = false;
       break;
 
     case 0:
-      *buf = 0;
+      *buf = '\0';
       return src;
 
     default:
@@ -367,27 +385,17 @@ static const char *status_format_str(char *buf, size_t buflen, size_t col, int c
   }
 
   if (optional)
-    status_line(buf, buflen, col, cols, menu, if_str);
+  {
+    mutt_expando_format(buf, buflen, col, cols, if_str, status_format_str,
+                        (unsigned long) menu, MUTT_FORMAT_NO_FLAGS);
+  }
   else if (flags & MUTT_FORMAT_OPTIONAL)
-    status_line(buf, buflen, col, cols, menu, else_str);
+  {
+    mutt_expando_format(buf, buflen, col, cols, else_str, status_format_str,
+                        (unsigned long) menu, MUTT_FORMAT_NO_FLAGS);
+  }
 
   return src;
-}
-
-/**
- * status_line - Create the status line
- * @param[out] buf    Buffer in which to save string
- * @param[in]  buflen Buffer length
- * @param[in]  col    Starting column
- * @param[in]  cols   Number of screen columns
- * @param[in]  menu   Current menu
- * @param[in]  p      Format string
- */
-static void status_line(char *buf, size_t buflen, size_t col, int cols,
-                        struct Menu *menu, const char *p)
-{
-  mutt_expando_format(buf, buflen, col, cols, p, status_format_str,
-                      (unsigned long) menu, 0);
 }
 
 /**
@@ -399,7 +407,6 @@ static void status_line(char *buf, size_t buflen, size_t col, int cols,
  */
 void menu_status_line(char *buf, size_t buflen, struct Menu *menu, const char *p)
 {
-  mutt_expando_format(buf, buflen, 0,
-                      menu ? menu->statuswin->cols : MuttStatusWindow->cols, p,
-                      status_format_str, (unsigned long) menu, 0);
+  mutt_expando_format(buf, buflen, 0, menu ? menu->statuswin->cols : buflen, p,
+                      status_format_str, (unsigned long) menu, MUTT_FORMAT_NO_FLAGS);
 }

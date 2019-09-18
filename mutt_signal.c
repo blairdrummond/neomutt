@@ -27,12 +27,13 @@
  */
 
 #include "config.h"
+#include <stddef.h>
 #include <errno.h>
 #include <signal.h>
 #include "mutt/mutt.h"
 #include "globals.h"
+#include "mutt_attach.h"
 #include "mutt_curses.h"
-#include "options.h"
 
 static int IsEndwin = 0;
 
@@ -47,7 +48,7 @@ static void curses_signal_handler(int sig)
   switch (sig)
   {
     case SIGTSTP: /* user requested a suspend */
-      if (!Suspend)
+      if (!C_Suspend)
         break;
       IsEndwin = isendwin();
       curs_set(1);
@@ -78,13 +79,35 @@ static void curses_signal_handler(int sig)
 
 /**
  * curses_exit_handler - Notify the user and shutdown gracefully
- * @param sig Signal number, e.g. SIGINT
+ * @param sig Signal number, e.g. SIGTERM
  */
 static void curses_exit_handler(int sig)
 {
   curs_set(1);
-  endwin();                   /* just to be safe */
+  endwin(); /* just to be safe */
+  mutt_unlink_temp_attachments();
   mutt_sig_exit_handler(sig); /* DOES NOT RETURN */
+}
+
+/**
+ * curses_segv_handler - Catch a segfault and print a backtrace
+ * @param sig Signal number, e.g. SIGSEGV
+ */
+static void curses_segv_handler(int sig)
+{
+  curs_set(1);
+  endwin(); /* just to be safe */
+#ifdef HAVE_LIBUNWIND
+  show_backtrace();
+#endif
+
+  struct sigaction act;
+  sigemptyset(&act.sa_mask);
+  act.sa_flags = 0;
+  act.sa_handler = SIG_DFL;
+  sigaction(sig, &act, NULL);
+  // Re-raise the signal to give outside handlers a chance to deal with it
+  raise(sig);
 }
 
 #ifdef USE_SLANG_CURSES
@@ -103,7 +126,7 @@ static int mutt_intr_hook(void)
  */
 void mutt_signal_init(void)
 {
-  mutt_sig_init(curses_signal_handler, curses_exit_handler);
+  mutt_sig_init(curses_signal_handler, curses_exit_handler, curses_segv_handler);
 
 #ifdef USE_SLANG_CURSES
   /* This bit of code is required because of the implementation of
@@ -111,8 +134,7 @@ void mutt_signal_init(void)
    * are in blocking mode, SLsys_getkey() will not return an error unless
    * a handler function is defined and it returns -1.  This is needed so
    * that if the user resizes the screen while at a prompt, it will just
-   * abort and go back to the main-menu.
-   */
+   * abort and go back to the main-menu.  */
   SLang_getkey_intr_hook = mutt_intr_hook;
 #endif
 }

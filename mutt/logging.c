@@ -28,21 +28,21 @@
 
 #include "config.h"
 #include <errno.h>
-#include <limits.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
 #include "logging.h"
+#include "date.h"
 #include "file.h"
 #include "memory.h"
 #include "message.h"
 #include "queue.h"
 #include "string2.h"
 
-const char *LevelAbbr = "PEWM12345"; /**< Abbreviations of logging level names */
+const char *LevelAbbr = "PEWM12345N"; /**< Abbreviations of logging level names */
 
 /**
  * MuttLogger - The log dispatcher
@@ -59,7 +59,7 @@ char *LogFileVersion = NULL; /**< Program version */
 /**
  * LogQueue - In-memory list of log lines
  */
-static struct LogList LogQueue = STAILQ_HEAD_INITIALIZER(LogQueue);
+static struct LogLineList LogQueue = STAILQ_HEAD_INITIALIZER(LogQueue);
 
 int LogQueueCount = 0; /**< Number of entries currently in the log queue */
 int LogQueueMax = 0;   /**< Maximum number of entries in the log queue */
@@ -76,15 +76,15 @@ int LogQueueMax = 0;   /**< Maximum number of entries in the log queue */
  */
 static const char *timestamp(time_t stamp)
 {
-  static char buf[23] = "";
+  static char buf[23] = { 0 };
   static time_t last = 0;
 
   if (stamp == 0)
-    stamp = time(NULL);
+    stamp = mutt_date_epoch();
 
   if (stamp != last)
   {
-    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", localtime(&stamp));
+    mutt_date_localtime_format(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", stamp);
     last = stamp;
   }
 
@@ -147,6 +147,9 @@ int log_file_open(bool verbose)
  */
 int log_file_set_filename(const char *file, bool verbose)
 {
+  if (!file)
+    return -1;
+
   /* also handles both being NULL */
   if (mutt_str_strcmp(LogFileName, file) == 0)
     return 0;
@@ -166,11 +169,11 @@ int log_file_set_filename(const char *file, bool verbose)
  * @retval  0 Success
  * @retval -1 Error, level is out of range
  *
- * The level can be between 0 and LL_DEBUG5.
+ * The level should be: LL_MESSAGE <= level < LL_MAX.
  */
 int log_file_set_level(int level, bool verbose)
 {
-  if ((level < 0) || (level > 5))
+  if ((level < LL_MESSAGE) || (level >= LL_MAX))
     return -1;
 
   if (level == LogFileLevel)
@@ -178,7 +181,7 @@ int log_file_set_level(int level, bool verbose)
 
   LogFileLevel = level;
 
-  if (level == 0)
+  if (level == LL_MESSAGE)
   {
     log_file_close(verbose);
   }
@@ -192,6 +195,16 @@ int log_file_set_level(int level, bool verbose)
   else
   {
     log_file_open(verbose);
+  }
+
+  if (LogFileLevel >= LL_DEBUG5)
+  {
+    fprintf(LogFileFP,
+            "\n"
+            "WARNING:\n"
+            "    Logging at this level can reveal personal information.\n"
+            "    Review the log carefully before posting in bug reports.\n"
+            "\n");
   }
 
   return 0;
@@ -215,7 +228,7 @@ void log_file_set_version(const char *version)
  */
 bool log_file_running(void)
 {
-  return (LogFileFP != NULL);
+  return LogFileFP;
 }
 
 /**
@@ -281,11 +294,17 @@ int log_disp_file(time_t stamp, const char *file, int line,
  */
 int log_queue_add(struct LogLine *ll)
 {
+  if (!ll)
+    return -1;
+
   STAILQ_INSERT_TAIL(&LogQueue, ll, entries);
 
   if ((LogQueueMax > 0) && (LogQueueCount >= LogQueueMax))
   {
+    ll = STAILQ_FIRST(&LogQueue);
     STAILQ_REMOVE_HEAD(&LogQueue, entries);
+    FREE(&ll->message);
+    FREE(&ll);
   }
   else
   {
@@ -329,7 +348,7 @@ void log_queue_empty(void)
 
 /**
  * log_queue_flush - Replay the log queue
- * @param disp Log dispatcher
+ * @param disp Log dispatcher - Implements ::log_dispatcher_t
  *
  * Pass all of the log entries in the queue to the log dispatcher provided.
  * The queue will be emptied afterwards.
@@ -365,7 +384,7 @@ int log_queue_save(FILE *fp)
   struct LogLine *ll = NULL;
   STAILQ_FOREACH(ll, &LogQueue, entries)
   {
-    strftime(buf, sizeof(buf), "%H:%M:%S", localtime(&ll->time));
+    mutt_date_localtime_format(buf, sizeof(buf), "%H:%M:%S", ll->time);
     fprintf(fp, "[%s]<%c> %s", buf, LevelAbbr[ll->level + 3], ll->message);
     if (ll->level <= 0)
       fputs("\n", fp);
@@ -376,14 +395,7 @@ int log_queue_save(FILE *fp)
 }
 
 /**
- * log_disp_queue - Save a log line to an internal queue
- * @param stamp    Unix time
- * @param file     Source file
- * @param line     Source line
- * @param function Source function
- * @param level    Logging level, e.g. #LL_WARNING
- * @param ...      Format string and parameters, like printf()
- * @retval >0 Success, number of characters written
+ * log_disp_queue - Save a log line to an internal queue - Implements ::log_dispatcher_t
  *
  * This log dispatcher saves a line of text to a queue.
  * The format string and parameters are expanded and the other parameters are
@@ -391,12 +403,12 @@ int log_queue_save(FILE *fp)
  *
  * @sa log_queue_set_max_size(), log_queue_flush(), log_queue_empty()
  *
- * @warning Log lines are limited to #LONG_STRING bytes.
+ * @warning Log lines are limited to 1024 bytes.
  */
 int log_disp_queue(time_t stamp, const char *file, int line,
                    const char *function, int level, ...)
 {
-  char buf[LONG_STRING] = "";
+  char buf[1024] = { 0 };
   int err = errno;
 
   va_list ap;
@@ -412,7 +424,7 @@ int log_disp_queue(time_t stamp, const char *file, int line,
   }
 
   struct LogLine *ll = mutt_mem_calloc(1, sizeof(*ll));
-  ll->time = stamp ? stamp : time(NULL);
+  ll->time = (stamp != 0) ? stamp : mutt_date_epoch();
   ll->file = file;
   ll->line = line;
   ll->function = function;
@@ -425,16 +437,7 @@ int log_disp_queue(time_t stamp, const char *file, int line,
 }
 
 /**
- * log_disp_terminal - Save a log line to the terminal
- * @param stamp    Unix time (optional)
- * @param file     Source file (UNUSED)
- * @param line     Source line (UNUSED)
- * @param function Source function
- * @param level    Logging level, e.g. #LL_WARNING
- * @param ...      Format string and parameters, like printf()
- * @retval -1 Error
- * @retval  0 Success, filtered
- * @retval >0 Success, number of characters written
+ * log_disp_terminal - Save a log line to the terminal - Implements ::log_dispatcher_t
  *
  * This log dispatcher saves a line of text to the terminal.
  * The format is:
@@ -449,7 +452,7 @@ int log_disp_terminal(time_t stamp, const char *file, int line,
   if ((level < LL_PERROR) || (level > LL_MESSAGE))
     return 0;
 
-  char buf[LONG_STRING];
+  char buf[1024];
 
   va_list ap;
   va_start(ap, level);
@@ -483,12 +486,13 @@ int log_disp_terminal(time_t stamp, const char *file, int line,
       case LL_DEBUG3:
       case LL_DEBUG4:
       case LL_DEBUG5:
+      case LL_NOTIFY:
         break;
     }
   }
 
   if (colour > 0)
-    ret += fprintf(fp, "\033[1;%dm", colour);
+    ret += fprintf(fp, "\033[1;%dm", colour); // Escape
 
   fputs(buf, fp);
 
@@ -496,10 +500,18 @@ int log_disp_terminal(time_t stamp, const char *file, int line,
     ret += fprintf(fp, ": %s", strerror(err));
 
   if (colour > 0)
-    ret += fprintf(fp, "\033[0m");
+    ret += fprintf(fp, "\033[0m"); // Escape
 
-  if (level < 1)
-    ret += fprintf(fp, "\n");
+  ret += fprintf(fp, "\n");
 
   return ret;
+}
+
+/**
+ * log_disp_null - Discard log lines - Implements ::log_dispatcher_t
+ */
+int log_disp_null(time_t stamp, const char *file, int line,
+                  const char *function, int level, ...)
+{
+  return 0;
 }

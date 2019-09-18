@@ -20,6 +20,12 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @page handler Decide how to display email content
+ *
+ * Decide how to display email content
+ */
+
 #include "config.h"
 #include <stddef.h>
 #include <ctype.h>
@@ -33,32 +39,51 @@
 #include <time.h>
 #include <unistd.h>
 #include "mutt/mutt.h"
+#include "config/lib.h"
+#include "email/lib.h"
 #include "mutt.h"
 #include "handler.h"
-#include "body.h"
 #include "copy.h"
 #include "enriched.h"
 #include "filter.h"
 #include "globals.h"
 #include "keymap.h"
+#include "mailcap.h"
+#include "mutt_attach.h"
+#include "mutt_logging.h"
+#include "muttlib.h"
 #include "ncrypt/ncrypt.h"
 #include "opcodes.h"
 #include "options.h"
-#include "protos.h"
-#include "rfc1524.h"
 #include "rfc3676.h"
 #include "state.h"
 #ifdef ENABLE_NLS
 #include <libintl.h>
 #endif
 
+/* These Config Variables are only used in handler.c */
+bool C_HonorDisposition; ///< Config: Don't display MIME parts inline if they have a disposition of 'attachment'
+bool C_ImplicitAutoview; ///< Config: Display MIME attachments inline if a 'copiousoutput' mailcap entry exists
+bool C_IncludeEncrypted; ///< Config: Whether to include encrypted content when replying
+bool C_IncludeOnlyfirst; ///< Config: Only include the first attachment when replying
+struct Slist *C_PreferredLanguages; ///< Config: Preferred languages for multilingual MIME
+bool C_ReflowText; ///< Config: Reformat paragraphs of 'format=flowed' text
+char *C_ShowMultipartAlternative; ///< Config: How to display 'multipart/alternative' MIME parts
+
 #define BUFI_SIZE 1000
 #define BUFO_SIZE 2000
 
-#define TXTHTML 1
-#define TXTPLAIN 2
-#define TXTENRICHED 3
+#define TXT_HTML 1
+#define TXT_PLAIN 2
+#define TXT_ENRICHED 3
 
+/**
+ * typedef handler_t - Manage a PGP or S/MIME encrypted MIME part
+ * @param m Body of the email
+ * @param s State of text being processed
+ * @retval 0 Success
+ * @retval -1 Error
+ */
 typedef int (*handler_t)(struct Body *b, struct State *s);
 
 /**
@@ -105,7 +130,8 @@ static void convert_to_state(iconv_t cd, char *bufi, size_t *l, struct State *s)
   {
     if (cd != (iconv_t)(-1))
     {
-      ob = bufo, obl = sizeof(bufo);
+      ob = bufo;
+      obl = sizeof(bufo);
       iconv(cd, NULL, NULL, &ob, &obl);
       if (ob != bufo)
         state_prefix_put(bufo, ob - bufo, s);
@@ -124,7 +150,8 @@ static void convert_to_state(iconv_t cd, char *bufi, size_t *l, struct State *s)
   ibl = *l;
   while (true)
   {
-    ob = bufo, obl = sizeof(bufo);
+    ob = bufo;
+    obl = sizeof(bufo);
     mutt_ch_iconv(cd, &ib, &ibl, &ob, &obl, 0, "?", NULL);
     if (ob == bufo)
       break;
@@ -145,7 +172,7 @@ static void decode_xbit(struct State *s, long len, bool istext, iconv_t cd)
 {
   if (!istext)
   {
-    mutt_file_copy_bytes(s->fpin, s->fpout, len);
+    mutt_file_copy_bytes(s->fp_in, s->fp_out, len);
     return;
   }
 
@@ -154,18 +181,18 @@ static void decode_xbit(struct State *s, long len, bool istext, iconv_t cd)
   int c;
   char bufi[BUFI_SIZE];
   size_t l = 0;
-  while ((c = fgetc(s->fpin)) != EOF && len--)
+  while (((c = fgetc(s->fp_in)) != EOF) && len--)
   {
     if ((c == '\r') && len)
     {
-      const int ch = fgetc(s->fpin);
+      const int ch = fgetc(s->fp_in);
       if (ch == '\n')
       {
         c = ch;
         len--;
       }
       else
-        ungetc(ch, s->fpin);
+        ungetc(ch, s->fp_in);
     }
 
     bufi[l++] = c;
@@ -189,14 +216,13 @@ static void decode_xbit(struct State *s, long len, bool istext, iconv_t cd)
 static int qp_decode_triple(char *s, char *d)
 {
   /* soft line break */
-  if ((*s == '=') && !(*(s + 1)))
+  if ((s[0] == '=') && (s[1] == '\0'))
     return 1;
 
   /* quoted-printable triple */
-  if ((*s == '=') && isxdigit((unsigned char) *(s + 1)) &&
-      isxdigit((unsigned char) *(s + 2)))
+  if ((s[0] == '=') && isxdigit((unsigned char) s[1]) && isxdigit((unsigned char) s[2]))
   {
-    *d = (hexval(*(s + 1)) << 4) | hexval(*(s + 2));
+    *d = (hexval(s[1]) << 4) | hexval(s[2]);
     return 0;
   }
 
@@ -267,22 +293,22 @@ static void qp_decode_line(char *dest, char *src, size_t *l, int last)
  * size.
  *
  * Now, we don't special-case if the line we read with fgets() isn't
- * terminated. We don't care about this, since STRING > 78, so corrupted input
- * will just be corrupted a bit more. That implies that STRING+1 bytes are
+ * terminated. We don't care about this, since 256 > 78, so corrupted input
+ * will just be corrupted a bit more. That implies that 256+1 bytes are
  * always sufficient to store the result of qp_decode_line.
  *
  * Finally, at soft line breaks, some part of a multibyte character may have
  * been left over by convert_to_state(). This shouldn't be more than 6
- * characters, so STRING + 7 should be sufficient memory to store the decoded
+ * characters, so 256+7 should be sufficient memory to store the decoded
  * data.
  *
  * Just to make sure that I didn't make some off-by-one error above, we just
- * use STRING*2 for the target buffer's size.
+ * use 512 for the target buffer's size.
  */
 static void decode_quoted(struct State *s, long len, bool istext, iconv_t cd)
 {
-  char line[STRING];
-  char decline[2 * STRING];
+  char line[256];
+  char decline[512];
   size_t l = 0;
   size_t l3;
 
@@ -295,23 +321,21 @@ static void decode_quoted(struct State *s, long len, bool istext, iconv_t cd)
      * out to be longer than this.  Just process the line in chunks.  This
      * really shouldn't happen according the MIME spec, since Q-P encoded
      * lines are at most 76 characters, but we should be liberal about what
-     * we accept.
-     */
-    if (fgets(line, MIN((ssize_t) sizeof(line), len + 1), s->fpin) == NULL)
+     * we accept.  */
+    if (!fgets(line, MIN((ssize_t) sizeof(line), len + 1), s->fp_in))
       break;
 
     size_t linelen = strlen(line);
     len -= linelen;
 
     /* inspect the last character we read so we can tell if we got the
-     * entire line.
-     */
-    const int last = linelen ? line[linelen - 1] : 0;
+     * entire line.  */
+    const int last = (linelen != 0) ? line[linelen - 1] : 0;
 
     /* chop trailing whitespace if we got the full line */
     if (last == '\n')
     {
-      while (linelen > 0 && ISSPACE(line[linelen - 1]))
+      while ((linelen > 0) && IS_SPACE(line[linelen - 1]))
         linelen--;
       line[linelen] = '\0';
     }
@@ -333,9 +357,9 @@ static void decode_quoted(struct State *s, long len, bool istext, iconv_t cd)
  */
 static unsigned char decode_byte(char ch)
 {
-  if (ch == 96)
+  if ((ch < 32) || (ch > 95))
     return 0;
-  return (ch - 32);
+  return ch - 32;
 }
 
 /**
@@ -347,7 +371,7 @@ static unsigned char decode_byte(char ch)
  */
 static void decode_uuencoded(struct State *s, long len, bool istext, iconv_t cd)
 {
-  char tmps[SHORT_STRING];
+  char tmps[128];
   char *pt = NULL;
   char bufi[BUFI_SIZE];
   size_t k = 0;
@@ -357,18 +381,18 @@ static void decode_uuencoded(struct State *s, long len, bool istext, iconv_t cd)
 
   while (len > 0)
   {
-    if ((fgets(tmps, sizeof(tmps), s->fpin)) == NULL)
+    if (!fgets(tmps, sizeof(tmps), s->fp_in))
       return;
     len -= mutt_str_strlen(tmps);
-    if ((mutt_str_strncmp(tmps, "begin", 5) == 0) && ISSPACE(tmps[5]))
+    if (mutt_str_startswith(tmps, "begin ", CASE_MATCH))
       break;
   }
   while (len > 0)
   {
-    if ((fgets(tmps, sizeof(tmps), s->fpin)) == NULL)
+    if (!fgets(tmps, sizeof(tmps), s->fp_in))
       return;
     len -= mutt_str_strlen(tmps);
-    if (mutt_str_strncmp(tmps, "end", 3) == 0)
+    if (mutt_str_startswith(tmps, "end", CASE_MATCH))
       break;
     pt = tmps;
     const unsigned char linelen = decode_byte(*pt);
@@ -404,16 +428,17 @@ static void decode_uuencoded(struct State *s, long len, bool istext, iconv_t cd)
  * Test if the `MM_NOASK` environment variable should allow autoviewing of the
  * attachment.
  *
- * @note If `MM_NOASK=1` then the function will automaticaly return true.
+ * @note If `MM_NOASK=1` then the function will automatically return true.
  */
 static bool is_mmnoask(const char *buf)
 {
-  char *p = NULL;
-  char tmp[LONG_STRING], *q = NULL;
-
   const char *val = mutt_str_getenv("MM_NOASK");
   if (!val)
     return false;
+
+  char *p = NULL;
+  char tmp[1024];
+  char *q = NULL;
 
   if (mutt_str_strcmp(val, "1") == 0)
     return true;
@@ -421,12 +446,12 @@ static bool is_mmnoask(const char *buf)
   mutt_str_strfcpy(tmp, val, sizeof(tmp));
   p = tmp;
 
-  while ((p = strtok(p, ",")) != NULL)
+  while ((p = strtok(p, ",")))
   {
     q = strrchr(p, '/');
     if (q)
     {
-      if (*(q + 1) == '*')
+      if (q[1] == '*')
       {
         if (mutt_str_strncasecmp(buf, p, q - p) == 0)
           return true;
@@ -439,8 +464,8 @@ static bool is_mmnoask(const char *buf)
     }
     else
     {
-      const int lng = mutt_str_strlen(p);
-      if ((buf[lng] == '/') && (mutt_str_strncasecmp(buf, p, lng) == 0))
+      const size_t plen = mutt_str_startswith(buf, p, CASE_IGNORE);
+      if ((plen != 0) && (buf[plen] == '/'))
         return true;
     }
 
@@ -458,12 +483,12 @@ static bool is_mmnoask(const char *buf)
  */
 static bool is_autoview(struct Body *b)
 {
-  char type[SHORT_STRING];
+  char type[128];
   bool is_av = false;
 
   snprintf(type, sizeof(type), "%s/%s", TYPE(b), b->subtype);
 
-  if (ImplicitAutoview)
+  if (C_ImplicitAutoview)
   {
     /* $implicit_autoview is essentially the same as "auto_view *" */
     is_av = true;
@@ -472,7 +497,7 @@ static bool is_autoview(struct Body *b)
   {
     /* determine if this type is on the user's auto_view list */
     mutt_check_lookup_list(b, type, sizeof(type));
-    struct ListNode *np;
+    struct ListNode *np = NULL;
     STAILQ_FOREACH(np, &AutoViewList, entries)
     {
       int i = mutt_str_strlen(np->data) - 1;
@@ -493,85 +518,82 @@ static bool is_autoview(struct Body *b)
    *
    * @warning type is altered by this call as a result of 'mime_lookup' support */
   if (is_av)
-    return rfc1524_mailcap_lookup(b, type, NULL, MUTT_AUTOVIEW);
+    return mailcap_lookup(b, type, NULL, MUTT_MC_AUTOVIEW);
 
   return false;
 }
 
 /**
- * autoview_handler - Handler for autoviewable attachments
- * @param a Body of the email
- * @param s State of text being processed
- * @retval 0 Success
- * @retval -1 Error
+ * autoview_handler - Handler for autoviewable attachments - Implements ::handler_t
  */
 static int autoview_handler(struct Body *a, struct State *s)
 {
-  struct Rfc1524MailcapEntry *entry = rfc1524_new_entry();
-  char buffer[LONG_STRING];
-  char type[STRING];
-  char command[HUGE_STRING];
-  char tempfile[PATH_MAX] = "";
+  struct MailcapEntry *entry = mailcap_entry_new();
+  char buf[1024];
+  char type[256];
+  struct Buffer *cmd = mutt_buffer_pool_get();
+  struct Buffer *tempfile = mutt_buffer_pool_get();
   char *fname = NULL;
-  FILE *fpin = NULL;
-  FILE *fpout = NULL;
-  FILE *fperr = NULL;
-  int piped = false;
-  pid_t thepid;
+  FILE *fp_in = NULL;
+  FILE *fp_out = NULL;
+  FILE *fp_err = NULL;
+  pid_t pid;
   int rc = 0;
 
   snprintf(type, sizeof(type), "%s/%s", TYPE(a), a->subtype);
-  rfc1524_mailcap_lookup(a, type, entry, MUTT_AUTOVIEW);
+  mailcap_lookup(a, type, entry, MUTT_MC_AUTOVIEW);
 
   fname = mutt_str_strdup(a->filename);
   mutt_file_sanitize_filename(fname, true);
-  rfc1524_expand_filename(entry->nametemplate, fname, tempfile, sizeof(tempfile));
+  mailcap_expand_filename(entry->nametemplate, fname, tempfile);
   FREE(&fname);
 
   if (entry->command)
   {
-    mutt_str_strfcpy(command, entry->command, sizeof(command));
+    mutt_buffer_strcpy(cmd, entry->command);
 
-    /* rfc1524_expand_command returns 0 if the file is required */
-    piped = rfc1524_expand_command(a, tempfile, type, command, sizeof(command));
+    /* mailcap_expand_command returns 0 if the file is required */
+    bool piped = mailcap_expand_command(a, mutt_b2s(tempfile), type, cmd);
 
     if (s->flags & MUTT_DISPLAY)
     {
       state_mark_attach(s);
-      state_printf(s, _("[-- Autoview using %s --]\n"), command);
-      mutt_message(_("Invoking autoview command: %s"), command);
+      state_printf(s, _("[-- Autoview using %s --]\n"), mutt_b2s(cmd));
+      mutt_message(_("Invoking autoview command: %s"), mutt_b2s(cmd));
     }
 
-    fpin = mutt_file_fopen(tempfile, "w+");
-    if (!fpin)
+    fp_in = mutt_file_fopen(mutt_b2s(tempfile), "w+");
+    if (!fp_in)
     {
       mutt_perror("fopen");
-      rfc1524_free_entry(&entry);
-      return -1;
+      mailcap_entry_free(&entry);
+      rc = -1;
+      goto cleanup;
     }
 
-    mutt_file_copy_bytes(s->fpin, fpin, a->length);
+    mutt_file_copy_bytes(s->fp_in, fp_in, a->length);
 
     if (!piped)
     {
-      mutt_file_fclose(&fpin);
-      thepid = mutt_create_filter(command, NULL, &fpout, &fperr);
+      mutt_file_fclose(&fp_in);
+      pid = mutt_create_filter(mutt_b2s(cmd), NULL, &fp_out, &fp_err);
     }
     else
     {
-      unlink(tempfile);
-      fflush(fpin);
-      rewind(fpin);
-      thepid = mutt_create_filter_fd(command, NULL, &fpout, &fperr, fileno(fpin), -1, -1);
+      unlink(mutt_b2s(tempfile));
+      fflush(fp_in);
+      rewind(fp_in);
+      pid = mutt_create_filter_fd(mutt_b2s(cmd), NULL, &fp_out, &fp_err,
+                                  fileno(fp_in), -1, -1);
     }
 
-    if (thepid < 0)
+    if (pid < 0)
     {
       mutt_perror(_("Can't create filter"));
       if (s->flags & MUTT_DISPLAY)
       {
         state_mark_attach(s);
-        state_printf(s, _("[-- Can't run %s. --]\n"), command);
+        state_printf(s, _("[-- Can't run %s. --]\n"), mutt_b2s(cmd));
       }
       rc = -1;
       goto bail;
@@ -579,68 +601,71 @@ static int autoview_handler(struct Body *a, struct State *s)
 
     if (s->prefix)
     {
-      while (fgets(buffer, sizeof(buffer), fpout) != NULL)
+      while (fgets(buf, sizeof(buf), fp_out))
       {
         state_puts(s->prefix, s);
-        state_puts(buffer, s);
+        state_puts(buf, s);
       }
       /* check for data on stderr */
-      if (fgets(buffer, sizeof(buffer), fperr))
+      if (fgets(buf, sizeof(buf), fp_err))
       {
         if (s->flags & MUTT_DISPLAY)
         {
           state_mark_attach(s);
-          state_printf(s, _("[-- Autoview stderr of %s --]\n"), command);
+          state_printf(s, _("[-- Autoview stderr of %s --]\n"), mutt_b2s(cmd));
         }
 
         state_puts(s->prefix, s);
-        state_puts(buffer, s);
-        while (fgets(buffer, sizeof(buffer), fperr) != NULL)
+        state_puts(buf, s);
+        while (fgets(buf, sizeof(buf), fp_err))
         {
           state_puts(s->prefix, s);
-          state_puts(buffer, s);
+          state_puts(buf, s);
         }
       }
     }
     else
     {
-      mutt_file_copy_stream(fpout, s->fpout);
+      mutt_file_copy_stream(fp_out, s->fp_out);
       /* Check for stderr messages */
-      if (fgets(buffer, sizeof(buffer), fperr))
+      if (fgets(buf, sizeof(buf), fp_err))
       {
         if (s->flags & MUTT_DISPLAY)
         {
           state_mark_attach(s);
-          state_printf(s, _("[-- Autoview stderr of %s --]\n"), command);
+          state_printf(s, _("[-- Autoview stderr of %s --]\n"), mutt_b2s(cmd));
         }
 
-        state_puts(buffer, s);
-        mutt_file_copy_stream(fperr, s->fpout);
+        state_puts(buf, s);
+        mutt_file_copy_stream(fp_err, s->fp_out);
       }
     }
 
   bail:
-    mutt_file_fclose(&fpout);
-    mutt_file_fclose(&fperr);
+    mutt_file_fclose(&fp_out);
+    mutt_file_fclose(&fp_err);
 
-    mutt_wait_filter(thepid);
+    mutt_wait_filter(pid);
     if (piped)
-      mutt_file_fclose(&fpin);
+      mutt_file_fclose(&fp_in);
     else
-      mutt_file_unlink(tempfile);
+      mutt_file_unlink(mutt_b2s(tempfile));
 
     if (s->flags & MUTT_DISPLAY)
       mutt_clear_error();
   }
-  rfc1524_free_entry(&entry);
+
+cleanup:
+  mailcap_entry_free(&entry);
+
+  mutt_buffer_pool_release(&cmd);
+  mutt_buffer_pool_release(&tempfile);
 
   return rc;
 }
 
 /**
- * text_plain_handler - Handler for plain text
- * @param b Body of email (UNUSED)
- * @param s State to work with
+ * text_plain_handler - Handler for plain text - Implements ::handler_t
  * @retval 0 Always
  *
  * When generating format=flowed ($text_flowed is set) from format=fixed, strip
@@ -650,15 +675,15 @@ static int autoview_handler(struct Body *a, struct State *s)
 static int text_plain_handler(struct Body *b, struct State *s)
 {
   char *buf = NULL;
-  size_t l = 0, sz = 0;
+  size_t sz = 0;
 
-  while ((buf = mutt_file_read_line(buf, &sz, s->fpin, NULL, 0)))
+  while ((buf = mutt_file_read_line(buf, &sz, s->fp_in, NULL, 0)))
   {
-    if ((mutt_str_strcmp(buf, "-- ") != 0) && TextFlowed)
+    if ((mutt_str_strcmp(buf, "-- ") != 0) && C_TextFlowed)
     {
-      l = mutt_str_strlen(buf);
-      while (l > 0 && buf[l - 1] == ' ')
-        buf[--l] = '\0';
+      size_t len = mutt_str_strlen(buf);
+      while ((len > 0) && (buf[len - 1] == ' '))
+        buf[--len] = '\0';
     }
     if (s->prefix)
       state_puts(s->prefix, s);
@@ -671,11 +696,7 @@ static int text_plain_handler(struct Body *b, struct State *s)
 }
 
 /**
- * message_handler - Handler for message/rfc822 body parts
- * @param a Body of the email
- * @param s State of text being processed
- * @retval 0 Success
- * @retval -1 Error
+ * message_handler - Handler for message/rfc822 body parts - Implements ::handler_t
  */
 static int message_handler(struct Body *a, struct State *s)
 {
@@ -684,31 +705,32 @@ static int message_handler(struct Body *a, struct State *s)
   LOFF_T off_start;
   int rc = 0;
 
-  off_start = ftello(s->fpin);
+  off_start = ftello(s->fp_in);
   if (off_start < 0)
     return -1;
 
-  if ((a->encoding == ENCBASE64) || (a->encoding == ENCQUOTEDPRINTABLE) ||
-      (a->encoding == ENCUUENCODED))
+  if ((a->encoding == ENC_BASE64) || (a->encoding == ENC_QUOTED_PRINTABLE) ||
+      (a->encoding == ENC_UUENCODED))
   {
-    fstat(fileno(s->fpin), &st);
+    fstat(fileno(s->fp_in), &st);
     b = mutt_body_new();
     b->length = (LOFF_T) st.st_size;
-    b->parts = mutt_rfc822_parse_message(s->fpin, b);
+    b->parts = mutt_rfc822_parse_message(s->fp_in, b);
   }
   else
     b = a;
 
   if (b->parts)
   {
-    mutt_copy_hdr(s->fpin, s->fpout, off_start, b->parts->offset,
-                  (((s->flags & MUTT_WEED) ||
-                    ((s->flags & (MUTT_DISPLAY | MUTT_PRINTING)) && Weed)) ?
-                       (CH_WEED | CH_REORDER) :
-                       0) |
-                      (s->prefix ? CH_PREFIX : 0) | CH_DECODE | CH_FROM |
-                      ((s->flags & MUTT_DISPLAY) ? CH_DISPLAY : 0),
-                  s->prefix);
+    CopyHeaderFlags chflags = CH_DECODE | CH_FROM;
+    if ((s->flags & MUTT_WEED) || ((s->flags & (MUTT_DISPLAY | MUTT_PRINTING)) && C_Weed))
+      chflags |= CH_WEED | CH_REORDER;
+    if (s->prefix)
+      chflags |= CH_PREFIX;
+    if (s->flags & MUTT_DISPLAY)
+      chflags |= CH_DISPLAY;
+
+    mutt_copy_hdr(s->fp_in, s->fp_out, off_start, b->parts->offset, chflags, s->prefix);
 
     if (s->prefix)
       state_puts(s->prefix, s);
@@ -717,8 +739,8 @@ static int message_handler(struct Body *a, struct State *s)
     rc = mutt_body_handler(b->parts, s);
   }
 
-  if ((a->encoding == ENCBASE64) || (a->encoding == ENCQUOTEDPRINTABLE) ||
-      (a->encoding == ENCUUENCODED))
+  if ((a->encoding == ENC_BASE64) || (a->encoding == ENC_QUOTED_PRINTABLE) ||
+      (a->encoding == ENC_UUENCODED))
   {
     mutt_body_free(&b);
   }
@@ -727,16 +749,12 @@ static int message_handler(struct Body *a, struct State *s)
 }
 
 /**
- * external_body_handler - Handler for external-body emails
- * @param b Body of the email
- * @param s State of text being processed
- * @retval 0 Success
- * @retval -1 Error
+ * external_body_handler - Handler for external-body emails - Implements ::handler_t
  */
 static int external_body_handler(struct Body *b, struct State *s)
 {
   const char *str = NULL;
-  char strbuf[LONG_STRING]; // STRING might be too short but LONG_STRING should be large enough
+  char strbuf[1024];
 
   const char *access_type = mutt_param_get(&b->parameter, "access-type");
   if (!access_type)
@@ -765,12 +783,10 @@ static int external_body_handler(struct Body *b, struct State *s)
     if (s->flags & (MUTT_DISPLAY | MUTT_PRINTING))
     {
       char pretty_size[10];
-      long size = 0;
-
       char *length = mutt_param_get(&b->parameter, "length");
       if (length)
       {
-        size = strtol(length, NULL, 10);
+        long size = strtol(length, NULL, 10);
         mutt_str_pretty_size(pretty_size, sizeof(pretty_size), size);
         if (expire != -1)
         {
@@ -786,11 +802,10 @@ static int external_body_handler(struct Body *b, struct State *s)
                  example although '1K' and '1024' represent the same number your
                  language might inflect the noun 'byte' differently.
 
-                 Sadly, we cannot do anything about that at the moment besides
+                 Sadly, we can't do anything about that at the moment besides
                  passing the precise size in bytes. If you are interested the
                  function responsible for the prettification is
-                 mutt_str_pretty_size() in mutt/string.c.
-               */
+                 mutt_str_pretty_size() in mutt/string.c. */
               "[-- This %s/%s attachment (size %s byte) has been deleted --]\n"
               "[-- on %s --]\n",
               "[-- This %s/%s attachment (size %s bytes) has been deleted --]\n"
@@ -810,11 +825,10 @@ static int external_body_handler(struct Body *b, struct State *s)
                  example although '1K' and '1024' represent the same number your
                  language might inflect the noun 'byte' differently.
 
-                 Sadly, we cannot do anything about that at the moment besides
+                 Sadly, we can't do anything about that at the moment besides
                  passing the precise size in bytes. If you are interested the
                  function responsible for the prettification is
-                 mutt_str_pretty_size() in mutt/string.c.
-               */
+                 mutt_str_pretty_size() in mutt/string.c.  */
               "[-- This %s/%s attachment (size %s byte) has been deleted --]\n",
               "[-- This %s/%s attachment (size %s bytes) has been deleted "
               "--]\n",
@@ -832,8 +846,7 @@ static int external_body_handler(struct Body *b, struct State *s)
              expands to a date as returned by `mutt_date_parse_date()`.
 
              Caution: Argument three %3$ is also defined but should not be used
-             in this translation!
-           */
+             in this translation!  */
           str = _("[-- This %s/%s attachment has been deleted --]\n[-- on %4$s "
                   "--]\n");
         }
@@ -841,8 +854,7 @@ static int external_body_handler(struct Body *b, struct State *s)
         {
           /* L10N: If the translation of this string is a multi line string, then
              each line should start with "[-- " and end with " --]".
-             The first "%s/%s" is a MIME type, e.g. "text/plain".
-           */
+             The first "%s/%s" is a MIME type, e.g. "text/plain". */
           str = _("[-- This %s/%s attachment has been deleted --]\n");
         }
       }
@@ -856,24 +868,29 @@ static int external_body_handler(struct Body *b, struct State *s)
         state_printf(s, _("[-- name: %s --]\n"), b->parts->filename);
       }
 
-      mutt_copy_hdr(s->fpin, s->fpout, ftello(s->fpin), b->parts->offset,
-                    (Weed ? (CH_WEED | CH_REORDER) : 0) | CH_DECODE, NULL);
+      CopyHeaderFlags chflags = CH_DECODE;
+      if (C_Weed)
+        chflags |= CH_WEED | CH_REORDER;
+
+      mutt_copy_hdr(s->fp_in, s->fp_out, ftello(s->fp_in), b->parts->offset, chflags, NULL);
     }
   }
-  else if (expiration && expire < time(NULL))
+  else if (expiration && (expire < mutt_date_epoch()))
   {
     if (s->flags & MUTT_DISPLAY)
     {
       /* L10N: If the translation of this string is a multi line string, then
          each line should start with "[-- " and end with " --]".
-         The "%s/%s" is a MIME type, e.g. "text/plain".
-       */
+         The "%s/%s" is a MIME type, e.g. "text/plain". */
       snprintf(strbuf, sizeof(strbuf), _("[-- This %s/%s attachment is not included, --]\n[-- and the indicated external source has --]\n[-- expired. --]\n"),
                TYPE(b->parts), b->parts->subtype);
       state_attach_puts(strbuf, s);
 
-      mutt_copy_hdr(s->fpin, s->fpout, ftello(s->fpin), b->parts->offset,
-                    (Weed ? (CH_WEED | CH_REORDER) : 0) | CH_DECODE | CH_DISPLAY, NULL);
+      CopyHeaderFlags chflags = CH_DECODE | CH_DISPLAY;
+      if (C_Weed)
+        chflags |= CH_WEED | CH_REORDER;
+
+      mutt_copy_hdr(s->fp_in, s->fp_out, ftello(s->fp_in), b->parts->offset, chflags, NULL);
     }
   }
   else
@@ -884,14 +901,16 @@ static int external_body_handler(struct Body *b, struct State *s)
          each line should start with "[-- " and end with " --]".
          The "%s/%s" is a MIME type, e.g. "text/plain".  The %s after
          access-type is an access-type as defined by the MIME RFCs, e.g. "FTP",
-         "LOCAL-FILE", "MAIL-SERVER".
-       */
+         "LOCAL-FILE", "MAIL-SERVER". */
       snprintf(strbuf, sizeof(strbuf), _("[-- This %s/%s attachment is not included, --]\n[-- and the indicated access-type %s is unsupported --]\n"),
                TYPE(b->parts), b->parts->subtype, access_type);
       state_attach_puts(strbuf, s);
 
-      mutt_copy_hdr(s->fpin, s->fpout, ftello(s->fpin), b->parts->offset,
-                    (Weed ? (CH_WEED | CH_REORDER) : 0) | CH_DECODE | CH_DISPLAY, NULL);
+      CopyHeaderFlags chflags = CH_DECODE | CH_DISPLAY;
+      if (C_Weed)
+        chflags |= CH_WEED | CH_REORDER;
+
+      mutt_copy_hdr(s->fp_in, s->fp_out, ftello(s->fp_in), b->parts->offset, chflags, NULL);
     }
   }
 
@@ -899,11 +918,7 @@ static int external_body_handler(struct Body *b, struct State *s)
 }
 
 /**
- * alternative_handler - Handler for multipart alternative emails
- * @param a Body of the email
- * @param s State of text being processed
- * @retval 0 Success
- * @retval -1 Error
+ * alternative_handler - Handler for multipart alternative emails - Implements ::handler_t
  */
 static int alternative_handler(struct Body *a, struct State *s)
 {
@@ -912,16 +927,16 @@ static int alternative_handler(struct Body *a, struct State *s)
   bool mustfree = false;
   int rc = 0;
 
-  if ((a->encoding == ENCBASE64) || (a->encoding == ENCQUOTEDPRINTABLE) ||
-      (a->encoding == ENCUUENCODED))
+  if ((a->encoding == ENC_BASE64) || (a->encoding == ENC_QUOTED_PRINTABLE) ||
+      (a->encoding == ENC_UUENCODED))
   {
     struct stat st;
     mustfree = true;
-    fstat(fileno(s->fpin), &st);
+    fstat(fileno(s->fp_in), &st);
     b = mutt_body_new();
     b->length = (long) st.st_size;
     b->parts = mutt_parse_multipart(
-        s->fpin, mutt_param_get(&a->parameter, "boundary"), (long) st.st_size,
+        s->fp_in, mutt_param_get(&a->parameter, "boundary"), (long) st.st_size,
         (mutt_str_strcasecmp("digest", a->subtype) == 0));
   }
   else
@@ -930,7 +945,7 @@ static int alternative_handler(struct Body *a, struct State *s)
   a = b;
 
   /* First, search list of preferred types */
-  struct ListNode *np;
+  struct ListNode *np = NULL;
   STAILQ_FOREACH(np, &AlternativeOrderList, entries)
   {
     int btlen; /* length of basetype */
@@ -939,7 +954,7 @@ static int alternative_handler(struct Body *a, struct State *s)
     char *c = strchr(np->data, '/');
     if (c)
     {
-      wild = ((c[1] == '*') && (c[2] == 0));
+      wild = ((c[1] == '*') && (c[2] == '\0'));
       btlen = c - np->data;
     }
     else
@@ -995,22 +1010,22 @@ static int alternative_handler(struct Body *a, struct State *s)
     int type = 0;
     while (b)
     {
-      if (b->type == TYPETEXT)
+      if (b->type == TYPE_TEXT)
       {
-        if ((mutt_str_strcasecmp("plain", b->subtype) == 0) && (type <= TXTPLAIN))
+        if ((mutt_str_strcasecmp("plain", b->subtype) == 0) && (type <= TXT_PLAIN))
         {
           choice = b;
-          type = TXTPLAIN;
+          type = TXT_PLAIN;
         }
-        else if ((mutt_str_strcasecmp("enriched", b->subtype) == 0) && (type <= TXTENRICHED))
+        else if ((mutt_str_strcasecmp("enriched", b->subtype) == 0) && (type <= TXT_ENRICHED))
         {
           choice = b;
-          type = TXTENRICHED;
+          type = TXT_ENRICHED;
         }
-        else if ((mutt_str_strcasecmp("html", b->subtype) == 0) && (type <= TXTHTML))
+        else if ((mutt_str_strcasecmp("html", b->subtype) == 0) && (type <= TXT_HTML))
         {
           choice = b;
-          type = TXTHTML;
+          type = TXT_HTML;
         }
       }
       b = b->next;
@@ -1034,19 +1049,19 @@ static int alternative_handler(struct Body *a, struct State *s)
 
   if (choice)
   {
-    if (s->flags & MUTT_DISPLAY && !Weed)
+    if (s->flags & MUTT_DISPLAY && !C_Weed)
     {
-      fseeko(s->fpin, choice->hdr_offset, SEEK_SET);
-      mutt_file_copy_bytes(s->fpin, s->fpout, choice->offset - choice->hdr_offset);
+      fseeko(s->fp_in, choice->hdr_offset, SEEK_SET);
+      mutt_file_copy_bytes(s->fp_in, s->fp_out, choice->offset - choice->hdr_offset);
     }
 
-    if (mutt_str_strcmp("info", ShowMultipartAlternative) == 0)
+    if (mutt_str_strcmp("info", C_ShowMultipartAlternative) == 0)
     {
       print_part_line(s, choice, 0);
     }
     mutt_body_handler(choice, s);
 
-    if (mutt_str_strcmp("info", ShowMultipartAlternative) == 0)
+    if (mutt_str_strcmp("info", C_ShowMultipartAlternative) == 0)
     {
       if (a->parts)
         b = a->parts;
@@ -1072,7 +1087,7 @@ static int alternative_handler(struct Body *a, struct State *s)
     /* didn't find anything that we could display! */
     state_mark_attach(s);
     state_puts(_("[-- Error:  Could not display any parts of "
-                 "Multipart/Alternative! --]\n"),
+                 "Multipart/Alternative --]\n"),
                s);
     rc = -1;
   }
@@ -1084,32 +1099,27 @@ static int alternative_handler(struct Body *a, struct State *s)
 }
 
 /**
- * multilingual_handler - Handler for multi-lingual emails
- * @param a Body of the email
- * @param s State of text being processed
+ * multilingual_handler - Handler for multi-lingual emails - Implements ::handler_t
  * @retval 0 Always
  */
 static int multilingual_handler(struct Body *a, struct State *s)
 {
-  struct Body *choice = NULL;
   struct Body *b = NULL;
   bool mustfree = false;
   int rc = 0;
-  struct Body *first_part = NULL;
-  struct Body *zxx_part = NULL;
-  char *lang = NULL;
 
-  mutt_debug(2, "RFC8255 >> entering in handler multilingual handler\n");
-  if ((a->encoding == ENCBASE64) || (a->encoding == ENCQUOTEDPRINTABLE) ||
-      (a->encoding == ENCUUENCODED))
+  mutt_debug(LL_DEBUG2,
+             "RFC8255 >> entering in handler multilingual handler\n");
+  if ((a->encoding == ENC_BASE64) || (a->encoding == ENC_QUOTED_PRINTABLE) ||
+      (a->encoding == ENC_UUENCODED))
   {
     struct stat st;
     mustfree = true;
-    fstat(fileno(s->fpin), &st);
+    fstat(fileno(s->fp_in), &st);
     b = mutt_body_new();
     b->length = (long) st.st_size;
     b->parts = mutt_parse_multipart(
-        s->fpin, mutt_param_get(&a->parameter, "boundary"), (long) st.st_size,
+        s->fp_in, mutt_param_get(&a->parameter, "boundary"), (long) st.st_size,
         (mutt_str_strcasecmp("digest", a->subtype) == 0));
   }
   else
@@ -1122,15 +1132,21 @@ static int multilingual_handler(struct Body *a, struct State *s)
   else
     b = a;
 
-  char *preferred_languages = NULL;
-  if (PreferredLanguages)
+  if (C_PreferredLanguages)
   {
-    mutt_debug(2, "RFC8255 >> preferred_languages set in config to '%s'\n", PreferredLanguages);
-    preferred_languages = mutt_str_strdup(PreferredLanguages);
-    lang = strtok(preferred_languages, ",");
+    struct Buffer *langs = mutt_buffer_pool_get();
+    cs_str_string_get(Config, "preferred_languages", langs);
+    mutt_debug(LL_DEBUG2, "RFC8255 >> preferred_languages set in config to '%s'\n",
+               mutt_b2s(langs));
+    mutt_buffer_pool_release(&langs);
   }
 
-  while (lang)
+  struct Body *choice = NULL;
+  struct Body *first_part = NULL;
+  struct Body *zxx_part = NULL;
+  struct ListNode *np = NULL;
+
+  STAILQ_FOREACH(np, &C_PreferredLanguages->head, entries)
   {
     while (b)
     {
@@ -1142,12 +1158,12 @@ static int multilingual_handler(struct Body *a, struct State *s)
         if (b->language && (mutt_str_strcmp("zxx", b->language) == 0))
           zxx_part = b;
 
-        mutt_debug(2, "RFC8255 >> comparing configuration preferred_language='%s' to mail part content-language='%s'\n",
-                   lang, b->language);
-        if (lang && b->language && (mutt_str_strcmp(lang, b->language) == 0))
+        mutt_debug(LL_DEBUG2, "RFC8255 >> comparing configuration preferred_language='%s' to mail part content-language='%s'\n",
+                   np->data, b->language);
+        if (b->language && (mutt_str_strcmp(np->data, b->language) == 0))
         {
-          mutt_debug(2, "RFC8255 >> preferred_language='%s' matches content-language='%s' >> part selected to be displayed\n",
-                     lang, b->language);
+          mutt_debug(LL_DEBUG2, "RFC8255 >> preferred_language='%s' matches content-language='%s' >> part selected to be displayed\n",
+                     np->data, b->language);
           choice = b;
           break;
         }
@@ -1158,8 +1174,6 @@ static int multilingual_handler(struct Body *a, struct State *s)
 
     if (choice)
       break;
-
-    lang = strtok(NULL, ",");
 
     if (a->parts)
       b = a->parts;
@@ -1180,16 +1194,11 @@ static int multilingual_handler(struct Body *a, struct State *s)
   if (mustfree)
     mutt_body_free(&a);
 
-  FREE(&preferred_languages);
   return rc;
 }
 
 /**
- * multipart_handler - Handler for multipart emails
- * @param a Body of the email
- * @param s State of text being processed
- * @retval 0 Success
- * @retval -1 Error
+ * multipart_handler - Handler for multipart emails - Implements ::handler_t
  */
 static int multipart_handler(struct Body *a, struct State *s)
 {
@@ -1198,14 +1207,14 @@ static int multipart_handler(struct Body *a, struct State *s)
   int count;
   int rc = 0;
 
-  if ((a->encoding == ENCBASE64) || (a->encoding == ENCQUOTEDPRINTABLE) ||
-      (a->encoding == ENCUUENCODED))
+  if ((a->encoding == ENC_BASE64) || (a->encoding == ENC_QUOTED_PRINTABLE) ||
+      (a->encoding == ENC_UUENCODED))
   {
-    fstat(fileno(s->fpin), &st);
+    fstat(fileno(s->fp_in), &st);
     b = mutt_body_new();
     b->length = (long) st.st_size;
     b->parts = mutt_parse_multipart(
-        s->fpin, mutt_param_get(&a->parameter, "boundary"), (long) st.st_size,
+        s->fp_in, mutt_param_get(&a->parameter, "boundary"), (long) st.st_size,
         (mutt_str_strcasecmp("digest", a->subtype) == 0));
   }
   else
@@ -1226,10 +1235,10 @@ static int multipart_handler(struct Body *a, struct State *s)
       else
         state_printf(s, _("[-- Attachment #%d --]\n"), count);
       print_part_line(s, p, 0);
-      if (!Weed)
+      if (!C_Weed)
       {
-        fseeko(s->fpin, p->hdr_offset, SEEK_SET);
-        mutt_file_copy_bytes(s->fpin, s->fpout, p->offset - p->hdr_offset);
+        fseeko(s->fp_in, p->hdr_offset, SEEK_SET);
+        mutt_file_copy_bytes(s->fp_in, s->fp_out, p->offset - p->hdr_offset);
       }
       else
         state_putc('\n', s);
@@ -1241,18 +1250,18 @@ static int multipart_handler(struct Body *a, struct State *s)
     if (rc != 0)
     {
       mutt_error(_("One or more parts of this message could not be displayed"));
-      mutt_debug(1, "Failed on attachment #%d, type %s/%s.\n", count, TYPE(p),
-                 NONULL(p->subtype));
+      mutt_debug(LL_DEBUG1, "Failed on attachment #%d, type %s/%s\n", count,
+                 TYPE(p), NONULL(p->subtype));
     }
 
-    if ((s->flags & MUTT_REPLYING) && IncludeOnlyfirst && (s->flags & MUTT_FIRSTDONE))
+    if ((s->flags & MUTT_REPLYING) && C_IncludeOnlyfirst && (s->flags & MUTT_FIRSTDONE))
     {
       break;
     }
   }
 
-  if ((a->encoding == ENCBASE64) || (a->encoding == ENCQUOTEDPRINTABLE) ||
-      (a->encoding == ENCUUENCODED))
+  if ((a->encoding == ENC_BASE64) || (a->encoding == ENC_QUOTED_PRINTABLE) ||
+      (a->encoding == ENC_UUENCODED))
   {
     mutt_body_free(&b);
   }
@@ -1267,7 +1276,7 @@ static int multipart_handler(struct Body *a, struct State *s)
  * run_decode_and_handler - Run an appropriate decoder for an email
  * @param b         Body of the email
  * @param s         State to work with
- * @param handler   Callback function to process the content, e.g. rfc3676_handler()
+ * @param handler   Callback function to process the content - Implements ::handler_t
  * @param plaintext Is the content in plain text
  * @retval 0 Success
  * @retval -1 Error
@@ -1282,7 +1291,7 @@ static int run_decode_and_handler(struct Body *b, struct State *s,
   int decode = 0;
   int rc = 0;
 
-  fseeko(s->fpin, b->offset, SEEK_SET);
+  fseeko(s->fp_in, b->offset, SEEK_SET);
 
 #ifdef USE_FMEMOPEN
   char *temp = NULL;
@@ -1290,8 +1299,8 @@ static int run_decode_and_handler(struct Body *b, struct State *s,
 #endif
 
   /* see if we need to decode this part before processing it */
-  if ((b->encoding == ENCBASE64) || (b->encoding == ENCQUOTEDPRINTABLE) ||
-      (b->encoding == ENCUUENCODED) || (plaintext || mutt_is_text_part(b)))
+  if ((b->encoding == ENC_BASE64) || (b->encoding == ENC_QUOTED_PRINTABLE) ||
+      (b->encoding == ENC_UUENCODED) || (plaintext || mutt_is_text_part(b)))
   /* text subtypes may require character set conversion even with 8bit encoding */
   {
     const int orig_type = b->type;
@@ -1301,75 +1310,73 @@ static int run_decode_and_handler(struct Body *b, struct State *s,
     if (!plaintext)
     {
       /* decode to a tempfile, saving the original destination */
-      fp = s->fpout;
+      fp = s->fp_out;
 #ifdef USE_FMEMOPEN
-      s->fpout = open_memstream(&temp, &tempsize);
-      if (!s->fpout)
+      s->fp_out = open_memstream(&temp, &tempsize);
+      if (!s->fp_out)
       {
-        mutt_error(_("Unable to open 'memory stream'!"));
-        mutt_debug(1, "Can't open 'memory stream'.\n");
+        mutt_error(_("Unable to open 'memory stream'"));
+        mutt_debug(LL_DEBUG1, "Can't open 'memory stream'\n");
         return -1;
       }
 #else
       mutt_mktemp(tempfile, sizeof(tempfile));
-      s->fpout = mutt_file_fopen(tempfile, "w");
-      if (!s->fpout)
+      s->fp_out = mutt_file_fopen(tempfile, "w");
+      if (!s->fp_out)
       {
-        mutt_error(_("Unable to open temporary file!"));
-        mutt_debug(1, "Can't open %s.\n", tempfile);
+        mutt_error(_("Unable to open temporary file"));
+        mutt_debug(LL_DEBUG1, "Can't open %s\n", tempfile);
         return -1;
       }
 #endif
       /* decoding the attachment changes the size and offset, so save a copy
-       * of the "real" values now, and restore them after processing
-       */
+       * of the "real" values now, and restore them after processing */
       tmplength = b->length;
       tmpoffset = b->offset;
 
       /* if we are decoding binary bodies, we don't want to prefix each
-       * line with the prefix or else the data will get corrupted.
-       */
+       * line with the prefix or else the data will get corrupted.  */
       save_prefix = s->prefix;
       s->prefix = NULL;
 
       decode = 1;
     }
     else
-      b->type = TYPETEXT;
+      b->type = TYPE_TEXT;
 
     mutt_decode_attachment(b, s);
 
     if (decode)
     {
-      b->length = ftello(s->fpout);
+      b->length = ftello(s->fp_out);
       b->offset = 0;
 #ifdef USE_FMEMOPEN
-      /* When running under torify, mutt_file_fclose(&s->fpout) does not seem to
+      /* When running under torify, mutt_file_fclose(&s->fp_out) does not seem to
        * update tempsize. On the other hand, fflush does.  See
        * https://github.com/neomutt/neomutt/issues/440 */
-      fflush(s->fpout);
+      fflush(s->fp_out);
 #endif
-      mutt_file_fclose(&s->fpout);
+      mutt_file_fclose(&s->fp_out);
 
       /* restore final destination and substitute the tempfile for input */
-      s->fpout = fp;
-      fp = s->fpin;
+      s->fp_out = fp;
+      fp = s->fp_in;
 #ifdef USE_FMEMOPEN
       if (tempsize)
       {
-        s->fpin = fmemopen(temp, tempsize, "r");
+        s->fp_in = fmemopen(temp, tempsize, "r");
       }
       else
-      { /* fmemopen cannot handle zero-length buffers */
-        s->fpin = mutt_file_fopen("/dev/null", "r");
+      { /* fmemopen can't handle zero-length buffers */
+        s->fp_in = mutt_file_fopen("/dev/null", "r");
       }
-      if (!s->fpin)
+      if (!s->fp_in)
       {
-        mutt_perror(_("failed to re-open 'memory stream'!"));
+        mutt_perror(_("failed to re-open 'memory stream'"));
         return -1;
       }
 #else
-      s->fpin = fopen(tempfile, "r");
+      s->fp_in = fopen(tempfile, "r");
       unlink(tempfile);
 #endif
       /* restore the prefix */
@@ -1385,7 +1392,8 @@ static int run_decode_and_handler(struct Body *b, struct State *s,
     rc = handler(b, s);
     if (rc != 0)
     {
-      mutt_debug(1, "Failed on attachment of type %s/%s.\n", TYPE(b), NONULL(b->subtype));
+      mutt_debug(LL_DEBUG1, "Failed on attachment of type %s/%s\n", TYPE(b),
+                 NONULL(b->subtype));
     }
 
     if (decode)
@@ -1394,11 +1402,11 @@ static int run_decode_and_handler(struct Body *b, struct State *s,
       b->offset = tmpoffset;
 
       /* restore the original source stream */
-      mutt_file_fclose(&s->fpin);
+      mutt_file_fclose(&s->fp_in);
 #ifdef USE_FMEMOPEN
       FREE(&temp);
 #endif
-      s->fpin = fp;
+      s->fp_in = fp;
     }
   }
   s->flags |= MUTT_FIRSTDONE;
@@ -1407,34 +1415,58 @@ static int run_decode_and_handler(struct Body *b, struct State *s,
 }
 
 /**
- * valid_pgp_encrypted_handler - Handler for valid pgp-encrypted emails
- * @param b Body of the email
- * @param s State to work with
- * @retval 0 Success
- * @retval -1 Error
+ * valid_pgp_encrypted_handler - Handler for valid pgp-encrypted emails - Implements ::handler_t
  */
 static int valid_pgp_encrypted_handler(struct Body *b, struct State *s)
 {
   struct Body *octetstream = b->parts->next;
-  int rc = crypt_pgp_encrypted_handler(octetstream, s);
+
+  /* clear out any mime headers before the handler, so they can't be spoofed. */
+  mutt_env_free(&b->mime_headers);
+  mutt_env_free(&octetstream->mime_headers);
+
+  int rc;
+  /* Some clients improperly encode the octetstream part. */
+  if (octetstream->encoding != ENC_7BIT)
+    rc = run_decode_and_handler(octetstream, s, crypt_pgp_encrypted_handler, 0);
+  else
+    rc = crypt_pgp_encrypted_handler(octetstream, s);
   b->goodsig |= octetstream->goodsig;
+
+  /* Relocate protected headers onto the multipart/encrypted part */
+  if (!rc && octetstream->mime_headers)
+  {
+    b->mime_headers = octetstream->mime_headers;
+    octetstream->mime_headers = NULL;
+  }
 
   return rc;
 }
 
 /**
- * malformed_pgp_encrypted_handler - Handler for invalid pgp-encrypted emails
- * @param b Body of the email
- * @param s State to work with
- * @retval 0 Success
- * @retval -1 Error
+ * malformed_pgp_encrypted_handler - Handler for invalid pgp-encrypted emails - Implements ::handler_t
  */
 static int malformed_pgp_encrypted_handler(struct Body *b, struct State *s)
 {
   struct Body *octetstream = b->parts->next->next;
+
+  /* clear out any mime headers before the handler, so they can't be spoofed. */
+  mutt_env_free(&b->mime_headers);
+  mutt_env_free(&octetstream->mime_headers);
+
   /* exchange encodes the octet-stream, so re-run it through the decoder */
   int rc = run_decode_and_handler(octetstream, s, crypt_pgp_encrypted_handler, false);
   b->goodsig |= octetstream->goodsig;
+#ifdef USE_AUTOCRYPT
+  b->is_autocrypt |= octetstream->is_autocrypt;
+#endif
+
+  /* Relocate protected headers onto the multipart/encrypted part */
+  if (!rc && octetstream->mime_headers)
+  {
+    b->mime_headers = octetstream->mime_headers;
+    octetstream->mime_headers = NULL;
+  }
 
   return rc;
 }
@@ -1462,17 +1494,17 @@ void mutt_decode_base64(struct State *s, size_t len, bool istext, iconv_t cd)
   {
     for (i = 0; (i < 4) && (len > 0); len--)
     {
-      ch = fgetc(s->fpin);
+      ch = fgetc(s->fp_in);
       if (ch == EOF)
         break;
-      if ((ch >= 0) && (ch < 128) && (base64val(ch) != -1 || ch == '='))
+      if ((ch >= 0) && (ch < 128) && ((base64val(ch) != -1) || (ch == '=')))
         buf[i++] = ch;
     }
     if (i != 4)
     {
       /* "i" may be zero if there is trailing whitespace, which is not an error */
       if (i != 0)
-        mutt_debug(2, "didn't get a multiple of 4 chars.\n");
+        mutt_debug(LL_DEBUG2, "didn't get a multiple of 4 chars\n");
       break;
     }
 
@@ -1517,6 +1549,7 @@ int mutt_body_handler(struct Body *b, struct State *s)
 
   bool plaintext = false;
   handler_t handler = NULL;
+  handler_t encrypted_handler = NULL;
   int rc = 0;
 
   int oflags = s->flags;
@@ -1528,16 +1561,18 @@ int mutt_body_handler(struct Body *b, struct State *s)
     handler = autoview_handler;
     s->flags &= ~MUTT_CHARCONV;
   }
-  else if (b->type == TYPETEXT)
+  else if (b->type == TYPE_TEXT)
   {
     if (mutt_str_strcasecmp("plain", b->subtype) == 0)
     {
       /* avoid copying this part twice since removing the transfer-encoding is
-       * the only operation needed.
-       */
+       * the only operation needed.  */
       if (((WithCrypto & APPLICATION_PGP) != 0) && mutt_is_application_pgp(b))
-        handler = crypt_pgp_application_handler;
-      else if (ReflowText &&
+      {
+        encrypted_handler = crypt_pgp_application_handler;
+        handler = encrypted_handler;
+      }
+      else if (C_ReflowText &&
                (mutt_str_strcasecmp("flowed",
                                     mutt_param_get(&b->parameter, "format")) == 0))
       {
@@ -1553,7 +1588,7 @@ int mutt_body_handler(struct Body *b, struct State *s)
     else /* text body type without a handler */
       plaintext = false;
   }
-  else if (b->type == TYPEMESSAGE)
+  else if (b->type == TYPE_MESSAGE)
   {
     if (mutt_is_message_type(b->type, b->subtype))
       handler = message_handler;
@@ -1562,14 +1597,14 @@ int mutt_body_handler(struct Body *b, struct State *s)
     else if (mutt_str_strcasecmp("external-body", b->subtype) == 0)
       handler = external_body_handler;
   }
-  else if (b->type == TYPEMULTIPART)
+  else if (b->type == TYPE_MULTIPART)
   {
-    if ((mutt_str_strcmp("inline", ShowMultipartAlternative) != 0) &&
+    if ((mutt_str_strcmp("inline", C_ShowMultipartAlternative) != 0) &&
         (mutt_str_strcasecmp("alternative", b->subtype) == 0))
     {
       handler = alternative_handler;
     }
-    else if ((mutt_str_strcmp("inline", ShowMultipartAlternative) != 0) &&
+    else if ((mutt_str_strcmp("inline", C_ShowMultipartAlternative) != 0) &&
              (mutt_str_strcasecmp("multilingual", b->subtype) == 0))
     {
       handler = multilingual_handler;
@@ -1577,29 +1612,32 @@ int mutt_body_handler(struct Body *b, struct State *s)
     else if ((WithCrypto != 0) && (mutt_str_strcasecmp("signed", b->subtype) == 0))
     {
       if (!mutt_param_get(&b->parameter, "protocol"))
-        mutt_error(_("Error: multipart/signed has no protocol."));
+        mutt_error(_("Error: multipart/signed has no protocol"));
       else if (s->flags & MUTT_VERIFY)
         handler = mutt_signed_handler;
     }
     else if (mutt_is_valid_multipart_pgp_encrypted(b))
     {
-      handler = valid_pgp_encrypted_handler;
+      encrypted_handler = valid_pgp_encrypted_handler;
+      handler = encrypted_handler;
     }
     else if (mutt_is_malformed_multipart_pgp_encrypted(b))
     {
-      handler = malformed_pgp_encrypted_handler;
+      encrypted_handler = malformed_pgp_encrypted_handler;
+      handler = encrypted_handler;
     }
 
     if (!handler)
       handler = multipart_handler;
 
-    if ((b->encoding != ENC7BIT) && (b->encoding != ENC8BIT) && (b->encoding != ENCBINARY))
+    if ((b->encoding != ENC_7BIT) && (b->encoding != ENC_8BIT) && (b->encoding != ENC_BINARY))
     {
-      mutt_debug(1, "Bad encoding type %d for multipart entity, assuming 7 bit\n", b->encoding);
-      b->encoding = ENC7BIT;
+      mutt_debug(LL_DEBUG1, "Bad encoding type %d for multipart entity, assuming 7 bit\n",
+                 b->encoding);
+      b->encoding = ENC_7BIT;
     }
   }
-  else if ((WithCrypto != 0) && (b->type == TYPEAPPLICATION))
+  else if ((WithCrypto != 0) && (b->type == TYPE_APPLICATION))
   {
     if (OptDontHandlePgpKeys && (mutt_str_strcasecmp("pgp-keys", b->subtype) == 0))
     {
@@ -1607,25 +1645,39 @@ int mutt_body_handler(struct Body *b, struct State *s)
       plaintext = true;
     }
     else if (((WithCrypto & APPLICATION_PGP) != 0) && mutt_is_application_pgp(b))
-      handler = crypt_pgp_application_handler;
+    {
+      encrypted_handler = crypt_pgp_application_handler;
+      handler = encrypted_handler;
+    }
     else if (((WithCrypto & APPLICATION_SMIME) != 0) && mutt_is_application_smime(b))
-      handler = crypt_smime_application_handler;
+    {
+      encrypted_handler = crypt_smime_application_handler;
+      handler = encrypted_handler;
+    }
   }
 
   /* only respect disposition == attachment if we're not
-     displaying from the attachment menu (i.e. pager) */
-  if ((!HonorDisposition || ((b->disposition != DISPATTACH) || OptViewAttach)) &&
+   * displaying from the attachment menu (i.e. pager) */
+  if ((!C_HonorDisposition || ((b->disposition != DISP_ATTACH) || OptViewAttach)) &&
       (plaintext || handler))
   {
+    /* Prevent encrypted attachments from being included in replies
+     * unless $include_encrypted is set. */
+    if ((s->flags & MUTT_REPLYING) && (s->flags & MUTT_FIRSTDONE) &&
+        encrypted_handler && !C_IncludeEncrypted)
+    {
+      goto cleanup;
+    }
+
     rc = run_decode_and_handler(b, s, handler, plaintext);
   }
   /* print hint to use attachment menu for disposition == attachment
-     if we're not already being called from there */
-  else if ((s->flags & MUTT_DISPLAY) || ((b->disposition == DISPATTACH) && !OptViewAttach &&
-                                         HonorDisposition && (plaintext || handler)))
+   * if we're not already being called from there */
+  else if ((s->flags & MUTT_DISPLAY) || ((b->disposition == DISP_ATTACH) && !OptViewAttach &&
+                                         C_HonorDisposition && (plaintext || handler)))
   {
     const char *str = NULL;
-    char keystroke[SHORT_STRING];
+    char keystroke[128];
     keystroke[0] = '\0';
 
     if (!OptViewAttach)
@@ -1633,43 +1685,40 @@ int mutt_body_handler(struct Body *b, struct State *s)
       if (km_expand_key(keystroke, sizeof(keystroke),
                         km_find_func(MENU_PAGER, OP_VIEW_ATTACHMENTS)))
       {
-        if (HonorDisposition && b->disposition == DISPATTACH)
+        if (C_HonorDisposition && (b->disposition == DISP_ATTACH))
         {
           /* L10N: Caution: Arguments %1$s and %2$s are also defined but should
              not be used in this translation!
-
-             %3$s expands to a keystroke/key binding, e.g. 'v'.
-           */
+             %3$s expands to a keystroke/key binding, e.g. 'v'.  */
           str = _(
               "[-- This is an attachment (use '%3$s' to view this part) --]\n");
         }
         else
         {
           /* L10N: %s/%s is a MIME type, e.g. "text/plain".
-             The last %s expands to a keystroke/key binding, e.g. 'v'.
-           */
+             The last %s expands to a keystroke/key binding, e.g. 'v'. */
           str =
               _("[-- %s/%s is unsupported (use '%s' to view this part) --]\n");
         }
       }
       else
       {
-        if (HonorDisposition && (b->disposition == DISPATTACH))
+        if (C_HonorDisposition && (b->disposition == DISP_ATTACH))
         {
           str = _("[-- This is an attachment (need 'view-attachments' bound to "
-                  "key!) --]\n");
+                  "key) --]\n");
         }
         else
         {
           /* L10N: %s/%s is a MIME type, e.g. "text/plain". */
           str = _("[-- %s/%s is unsupported (need 'view-attachments' bound to "
-                  "key!) --]\n");
+                  "key) --]\n");
         }
       }
     }
     else
     {
-      if (HonorDisposition && (b->disposition == DISPATTACH))
+      if (C_HonorDisposition && (b->disposition == DISP_ATTACH))
         str = _("[-- This is an attachment --]\n");
       else
       {
@@ -1681,10 +1730,12 @@ int mutt_body_handler(struct Body *b, struct State *s)
     state_printf(s, str, TYPE(b), b->subtype, keystroke);
   }
 
+cleanup:
   s->flags = oflags | (s->flags & MUTT_FIRSTDONE);
   if (rc != 0)
   {
-    mutt_debug(1, "Bailing on attachment of type %s/%s.\n", TYPE(b), NONULL(b->subtype));
+    mutt_debug(LL_DEBUG1, "Bailing on attachment of type %s/%s\n", TYPE(b),
+               NONULL(b->subtype));
   }
 
   return rc;
@@ -1699,11 +1750,11 @@ bool mutt_can_decode(struct Body *a)
 {
   if (is_autoview(a))
     return true;
-  else if (a->type == TYPETEXT)
+  else if (a->type == TYPE_TEXT)
     return true;
-  else if (a->type == TYPEMESSAGE)
+  else if (a->type == TYPE_MESSAGE)
     return true;
-  else if (a->type == TYPEMULTIPART)
+  else if (a->type == TYPE_MULTIPART)
   {
     if (WithCrypto)
     {
@@ -1720,7 +1771,7 @@ bool mutt_can_decode(struct Body *a)
         return true;
     }
   }
-  else if ((WithCrypto != 0) && a->type == TYPEAPPLICATION)
+  else if ((WithCrypto != 0) && (a->type == TYPE_APPLICATION))
   {
     if (((WithCrypto & APPLICATION_PGP) != 0) && mutt_is_application_pgp(a))
       return true;
@@ -1744,30 +1795,30 @@ void mutt_decode_attachment(struct Body *b, struct State *s)
   if (istext && s->flags & MUTT_CHARCONV)
   {
     char *charset = mutt_param_get(&b->parameter, "charset");
-    if (!charset && AssumedCharset && *AssumedCharset)
+    if (!charset && C_AssumedCharset)
       charset = mutt_ch_get_default_charset();
-    if (charset && Charset)
-      cd = mutt_ch_iconv_open(Charset, charset, MUTT_ICONV_HOOK_FROM);
+    if (charset && C_Charset)
+      cd = mutt_ch_iconv_open(C_Charset, charset, MUTT_ICONV_HOOK_FROM);
   }
   else if (istext && b->charset)
-    cd = mutt_ch_iconv_open(Charset, b->charset, MUTT_ICONV_HOOK_FROM);
+    cd = mutt_ch_iconv_open(C_Charset, b->charset, MUTT_ICONV_HOOK_FROM);
 
-  fseeko(s->fpin, b->offset, SEEK_SET);
+  fseeko(s->fp_in, b->offset, SEEK_SET);
   switch (b->encoding)
   {
-    case ENCQUOTEDPRINTABLE:
+    case ENC_QUOTED_PRINTABLE:
       decode_quoted(s, b->length,
                     istext || (((WithCrypto & APPLICATION_PGP) != 0) &&
                                mutt_is_application_pgp(b)),
                     cd);
       break;
-    case ENCBASE64:
+    case ENC_BASE64:
       mutt_decode_base64(s, b->length,
                          istext || (((WithCrypto & APPLICATION_PGP) != 0) &&
                                     mutt_is_application_pgp(b)),
                          cd);
       break;
-    case ENCUUENCODED:
+    case ENC_UUENCODED:
       decode_uuencoded(s, b->length,
                        istext || (((WithCrypto & APPLICATION_PGP) != 0) &&
                                   mutt_is_application_pgp(b)),
@@ -1784,4 +1835,3 @@ void mutt_decode_attachment(struct Body *b, struct State *s)
   if (cd != (iconv_t)(-1))
     iconv_close(cd);
 }
-

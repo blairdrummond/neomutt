@@ -2,7 +2,7 @@
 .\" -*- nroff -*-
 .\"
 .\"
-.\"     Copyright (C) 1996-2018 Michael R. Elkins <me@cs.hmc.edu>
+.\"     Copyright (C) 1996-2019 Michael R. Elkins <me@cs.hmc.edu>
 .\"
 .\"     This program is free software; you can redistribute it and/or modify
 .\"     it under the terms of the GNU General Public License as published by
@@ -489,9 +489,9 @@ r c li .
 10|\(em|~/.muttrc
 .T&
 l s s .
-\0\h'0m'\fB*\fP) Note the case of the filename
+\0\fB*\fP) Note the case of the filename
 .TE
-\p
+.PP
 .ad
 .
 .SS "\s-1Other relevant files\s0"

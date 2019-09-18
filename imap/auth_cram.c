@@ -33,11 +33,8 @@
 #include "mutt/mutt.h"
 #include "conn/conn.h"
 #include "auth.h"
-#include "globals.h"
 #include "mutt_account.h"
 #include "mutt_socket.h"
-#include "options.h"
-#include "protos.h"
 
 #define MD5_BLOCK_LEN 64
 #define MD5_DIGEST_LEN 16
@@ -50,7 +47,7 @@
  */
 static void hmac_md5(const char *password, char *challenge, unsigned char *response)
 {
-  struct Md5Ctx ctx;
+  struct Md5Ctx md5ctx;
   unsigned char ipad[MD5_BLOCK_LEN] = { 0 };
   unsigned char opad[MD5_BLOCK_LEN] = { 0 };
   unsigned char secret[MD5_BLOCK_LEN + 1];
@@ -80,69 +77,68 @@ static void hmac_md5(const char *password, char *challenge, unsigned char *respo
   }
 
   /* inner hash: challenge and ipadded secret */
-  mutt_md5_init_ctx(&ctx);
-  mutt_md5_process_bytes(ipad, MD5_BLOCK_LEN, &ctx);
-  mutt_md5_process(challenge, &ctx);
-  mutt_md5_finish_ctx(&ctx, response);
+  mutt_md5_init_ctx(&md5ctx);
+  mutt_md5_process_bytes(ipad, MD5_BLOCK_LEN, &md5ctx);
+  mutt_md5_process(challenge, &md5ctx);
+  mutt_md5_finish_ctx(&md5ctx, response);
 
   /* outer hash: inner hash and opadded secret */
-  mutt_md5_init_ctx(&ctx);
-  mutt_md5_process_bytes(opad, MD5_BLOCK_LEN, &ctx);
-  mutt_md5_process_bytes(response, MD5_DIGEST_LEN, &ctx);
-  mutt_md5_finish_ctx(&ctx, response);
+  mutt_md5_init_ctx(&md5ctx);
+  mutt_md5_process_bytes(opad, MD5_BLOCK_LEN, &md5ctx);
+  mutt_md5_process_bytes(response, MD5_DIGEST_LEN, &md5ctx);
+  mutt_md5_finish_ctx(&md5ctx, response);
 }
 
 /**
  * imap_auth_cram_md5 - Authenticate using CRAM-MD5
- * @param idata  Server data
+ * @param adata Imap Account data
  * @param method Name of this authentication method
- * @retval enum Result, e.g. #IMAP_AUTH_SUCCESS
+ * @retval #ImapAuthRes Result, e.g. #IMAP_AUTH_SUCCESS
  */
-enum ImapAuthRes imap_auth_cram_md5(struct ImapData *idata, const char *method)
+enum ImapAuthRes imap_auth_cram_md5(struct ImapAccountData *adata, const char *method)
 {
-  char ibuf[LONG_STRING * 2], obuf[LONG_STRING];
+  char ibuf[2048], obuf[1024];
   unsigned char hmac_response[MD5_DIGEST_LEN];
   int len;
   int rc;
 
-  if (!mutt_bit_isset(idata->capabilities, ACRAM_MD5))
+  if (!(adata->capabilities & IMAP_CAP_AUTH_CRAM_MD5))
     return IMAP_AUTH_UNAVAIL;
 
   mutt_message(_("Authenticating (CRAM-MD5)..."));
 
   /* get auth info */
-  if (mutt_account_getlogin(&idata->conn->account) < 0)
+  if (mutt_account_getlogin(&adata->conn->account) < 0)
     return IMAP_AUTH_FAILURE;
-  if (mutt_account_getpass(&idata->conn->account) < 0)
+  if (mutt_account_getpass(&adata->conn->account) < 0)
     return IMAP_AUTH_FAILURE;
 
-  imap_cmd_start(idata, "AUTHENTICATE CRAM-MD5");
+  imap_cmd_start(adata, "AUTHENTICATE CRAM-MD5");
 
   /* From RFC2195:
    * The data encoded in the first ready response contains a presumptively
    * arbitrary string of random digits, a timestamp, and the fully-qualified
    * primary host name of the server. The syntax of the unencoded form must
-   * correspond to that of an RFC822 'msg-id' [RFC822] as described in [POP3].
-   */
+   * correspond to that of an RFC822 'msg-id' [RFC822] as described in [POP3].  */
   do
-    rc = imap_cmd_step(idata);
-  while (rc == IMAP_CMD_CONTINUE);
+    rc = imap_cmd_step(adata);
+  while (rc == IMAP_RES_CONTINUE);
 
-  if (rc != IMAP_CMD_RESPOND)
+  if (rc != IMAP_RES_RESPOND)
   {
-    mutt_debug(1, "Invalid response from server: %s\n", ibuf);
+    mutt_debug(LL_DEBUG1, "Invalid response from server: %s\n", ibuf);
     goto bail;
   }
 
-  len = mutt_b64_decode(obuf, idata->buf + 2);
+  len = mutt_b64_decode(adata->buf + 2, obuf, sizeof(obuf));
   if (len == -1)
   {
-    mutt_debug(1, "Error decoding base64 response.\n");
+    mutt_debug(LL_DEBUG1, "Error decoding base64 response\n");
     goto bail;
   }
 
   obuf[len] = '\0';
-  mutt_debug(2, "CRAM challenge: %s\n", obuf);
+  mutt_debug(LL_DEBUG2, "CRAM challenge: %s\n", obuf);
 
   /* The client makes note of the data and then responds with a string
    * consisting of the user name, a space, and a 'digest'. The latter is
@@ -153,34 +149,33 @@ enum ImapAuthRes imap_auth_cram_md5(struct ImapData *idata, const char *method)
    * Note: The user name shouldn't be quoted. Since the digest can't contain
    *   spaces, there is no ambiguity. Some servers get this wrong, we'll work
    *   around them when the bug report comes in. Until then, we'll remain
-   *   blissfully RFC-compliant.
-   */
-  hmac_md5(idata->conn->account.pass, obuf, hmac_response);
+   *   blissfully RFC-compliant.  */
+  hmac_md5(adata->conn->account.pass, obuf, hmac_response);
   /* dubious optimisation I saw elsewhere: make the whole string in one call */
-  int off = snprintf(obuf, sizeof(obuf), "%s ", idata->conn->account.user);
+  int off = snprintf(obuf, sizeof(obuf), "%s ", adata->conn->account.user);
   mutt_md5_toascii(hmac_response, obuf + off);
-  mutt_debug(2, "CRAM response: %s\n", obuf);
+  mutt_debug(LL_DEBUG2, "CRAM response: %s\n", obuf);
 
   /* ibuf must be long enough to store the base64 encoding of obuf,
    * plus the additional debris */
-  mutt_b64_encode(ibuf, obuf, strlen(obuf), sizeof(ibuf) - 2);
+  mutt_b64_encode(obuf, strlen(obuf), ibuf, sizeof(ibuf) - 2);
   mutt_str_strcat(ibuf, sizeof(ibuf), "\r\n");
-  mutt_socket_send(idata->conn, ibuf);
+  mutt_socket_send(adata->conn, ibuf);
 
   do
-    rc = imap_cmd_step(idata);
-  while (rc == IMAP_CMD_CONTINUE);
+    rc = imap_cmd_step(adata);
+  while (rc == IMAP_RES_CONTINUE);
 
-  if (rc != IMAP_CMD_OK)
+  if (rc != IMAP_RES_OK)
   {
-    mutt_debug(1, "Error receiving server response.\n");
+    mutt_debug(LL_DEBUG1, "Error receiving server response\n");
     goto bail;
   }
 
-  if (imap_code(idata->buf))
+  if (imap_code(adata->buf))
     return IMAP_AUTH_SUCCESS;
 
 bail:
-  mutt_error(_("CRAM-MD5 authentication failed."));
+  mutt_error(_("CRAM-MD5 authentication failed"));
   return IMAP_AUTH_FAILURE;
 }

@@ -23,8 +23,8 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _MUTT_HCACHE_BACKEND_H
-#define _MUTT_HCACHE_BACKEND_H
+#ifndef MUTT_HCACHE_BACKEND_H
+#define MUTT_HCACHE_BACKEND_H
 
 #include <stdlib.h>
 
@@ -61,8 +61,8 @@ struct HcacheOps
   void *(*fetch)(void *ctx, const char *key, size_t keylen);
   /**
    * free - backend-specific routine to free fetched data
-   * @param ctx The backend-specific context retrieved via open()
-   * @param data A pointer to the data got with fetch() or fetch_raw()
+   * @param[in]  ctx The backend-specific context retrieved via open()
+   * @param[out] data A pointer to the data got with fetch() or fetch_raw()
    */
   void (*free)(void *ctx, void **data);
   /**
@@ -77,17 +77,17 @@ struct HcacheOps
    */
   int (*store)(void *ctx, const char *key, size_t keylen, void *data, size_t datalen);
   /**
-   * delete - backend-specific routine to delete a message's headers
+   * delete_header - backend-specific routine to delete a message's headers
    * @param ctx    The backend-specific context retrieved via open()
    * @param key    A message identification string
    * @param keylen The length of the string pointed to by key
    * @retval 0   Success
    * @retval num Error, a backend-specific error code
    */
-  int (*delete)(void *ctx, const char *key, size_t keylen);
+  int (*delete_header)(void *ctx, const char *key, size_t keylen);
   /**
    * close - backend-specific routine to close a context
-   * @param ctx The backend-specific context retrieved via open()
+   * @param[out] ctx The backend-specific context retrieved via open()
    *
    * Backend code is responsible for freeing any resources associated with the
    * @a ctx parameter. For this reason, backend code is passed a pointer-to-pointer
@@ -108,9 +108,9 @@ struct HcacheOps
     .fetch   = hcache_##_name##_fetch,                                         \
     .free    = hcache_##_name##_free,                                          \
     .store   = hcache_##_name##_store,                                         \
-    .delete  = hcache_##_name##_delete,                                        \
+    .delete_header  = hcache_##_name##_delete_header,                          \
     .close   = hcache_##_name##_close,                                         \
     .backend = hcache_##_name##_backend,                                       \
   };
 
-#endif /* _MUTT_HCACHE_BACKEND_H */
+#endif /* MUTT_HCACHE_BACKEND_H */

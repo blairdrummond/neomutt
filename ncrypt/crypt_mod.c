@@ -37,13 +37,16 @@
  */
 struct CryptModule
 {
-  struct CryptModuleSpecs *specs;
-  STAILQ_ENTRY(CryptModule) entries;
+  struct CryptModuleSpecs *specs;    ///< Crypto module definition
+  STAILQ_ENTRY(CryptModule) entries; ///< Linked list
 };
-static STAILQ_HEAD(, CryptModule) CryptModules = STAILQ_HEAD_INITIALIZER(CryptModules);
+STAILQ_HEAD(CryptModuleList, CryptModule);
+
+static struct CryptModuleList CryptModules = STAILQ_HEAD_INITIALIZER(CryptModules);
 
 /**
  * crypto_module_register - Register a new crypto module
+ * @param specs API functions
  */
 void crypto_module_register(struct CryptModuleSpecs *specs)
 {
@@ -54,8 +57,9 @@ void crypto_module_register(struct CryptModuleSpecs *specs)
 
 /**
  * crypto_module_lookup - Lookup a crypto module by name
+ * @param identifier Name, e.g. #APPLICATION_PGP
+ * @retval ptr Crypto module
  *
- * Return the crypto module specs for IDENTIFIER.
  * This function is usually used via the CRYPT_MOD_CALL[_CHECK] macros.
  */
 struct CryptModuleSpecs *crypto_module_lookup(int identifier)
@@ -69,4 +73,17 @@ struct CryptModuleSpecs *crypto_module_lookup(int identifier)
     }
   }
   return NULL;
+}
+
+/**
+ * crypto_module_free - Clean up the crypto modules
+ */
+void crypto_module_free(void)
+{
+  struct CryptModule *np = NULL, *tmp = NULL;
+  STAILQ_FOREACH_SAFE(np, &CryptModules, entries, tmp)
+  {
+    STAILQ_REMOVE(&CryptModules, np, CryptModule, entries);
+    FREE(&np);
+  }
 }

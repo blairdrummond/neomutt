@@ -35,15 +35,15 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <time.h>
 #include "mutt/mutt.h"
-#include "mutt.h"
-#include "account.h"
+#include "config/lib.h"
 #include "conn_globals.h"
+#include "connaccount.h"
 #include "connection.h"
 #include "keymap.h"
 #include "mutt_account.h"
 #include "mutt_menu.h"
+#include "muttlib.h"
 #include "opcodes.h"
 #include "options.h"
 #include "protos.h"
@@ -58,8 +58,13 @@
 #define CERTERR_HOSTNAME 16
 #define CERTERR_SIGNERNOTCA 32
 #define CERTERR_INSECUREALG 64
+#define CERTERR_OTHER 128
+
+const int dialog_row_len = 128;
 
 #define CERT_SEP "-----BEGIN"
+
+static int tls_socket_close(struct Connection *conn);
 
 /**
  * struct TlsSockData - TLS socket data
@@ -95,108 +100,7 @@ static int tls_init(void)
 }
 
 /**
- * tls_socket_read - Read data from a TLS socket
- * @param conn Connection to a server
- * @param buf Buffer to store the data
- * @param len Number of bytes to read
- * @retval >0 Success, number of bytes read
- * @retval -1 Error, see errno
- */
-static int tls_socket_read(struct Connection *conn, char *buf, size_t len)
-{
-  struct TlsSockData *data = conn->sockdata;
-  int rc;
-
-  if (!data)
-  {
-    mutt_error(_("Error: no TLS socket open"));
-    return -1;
-  }
-
-  do
-  {
-    rc = gnutls_record_recv(data->state, buf, len);
-    if ((rc < 0 && gnutls_error_is_fatal(rc) == 1) || rc == GNUTLS_E_INTERRUPTED)
-    {
-      mutt_error("tls_socket_read (%s)", gnutls_strerror(rc));
-      return -1;
-    }
-  } while (rc == GNUTLS_E_AGAIN);
-
-  return rc;
-}
-
-/**
- * tls_socket_write - Write data to a TLS socket
- * @param conn Connection to a server
- * @param buf  Buffer to read into
- * @param len  Number of bytes to read
- * @retval >0 Success, number of bytes written
- * @retval -1 Error, see errno
- */
-static int tls_socket_write(struct Connection *conn, const char *buf, size_t len)
-{
-  struct TlsSockData *data = conn->sockdata;
-  size_t sent = 0;
-
-  if (!data)
-  {
-    mutt_error(_("Error: no TLS socket open"));
-    return -1;
-  }
-
-  do
-  {
-    const int ret = gnutls_record_send(data->state, buf + sent, len - sent);
-    if (ret < 0)
-    {
-      if (gnutls_error_is_fatal(ret) == 1 || ret == GNUTLS_E_INTERRUPTED)
-      {
-        mutt_error("tls_socket_write (%s)", gnutls_strerror(ret));
-        return -1;
-      }
-      return ret;
-    }
-    sent += ret;
-  } while (sent < len);
-
-  return sent;
-}
-
-/**
- * tls_socket_close - Close a TLS socket
- * @param conn Connection to a server
- * @retval  0 Success
- * @retval -1 Error, see errno
- */
-static int tls_socket_close(struct Connection *conn)
-{
-  struct TlsSockData *data = conn->sockdata;
-  if (data)
-  {
-    /* shut down only the write half to avoid hanging waiting for the remote to respond.
-     *
-     * RFC5246 7.2.1. "Closure Alerts"
-     *
-     * It is not required for the initiator of the close to wait for the
-     * responding close_notify alert before closing the read side of the
-     * connection.
-     */
-    gnutls_bye(data->state, GNUTLS_SHUT_WR);
-
-    gnutls_certificate_free_credentials(data->xcred);
-    gnutls_deinit(data->state);
-    FREE(&conn->sockdata);
-  }
-
-  return raw_socket_close(conn);
-}
-
-/**
- * tls_starttls_close - Close a TLS connection
- * @param conn Connection to a server
- * @retval  0 Success
- * @retval -1 Error, see errno
+ * tls_starttls_close - Close a TLS connection - Implements Connection::conn_close()
  */
 static int tls_starttls_close(struct Connection *conn)
 {
@@ -206,6 +110,7 @@ static int tls_starttls_close(struct Connection *conn)
   conn->conn_read = raw_socket_read;
   conn->conn_write = raw_socket_write;
   conn->conn_close = raw_socket_close;
+  conn->conn_poll = raw_socket_poll;
 
   return rc;
 }
@@ -220,11 +125,9 @@ static int tls_starttls_close(struct Connection *conn)
  */
 static gnutls_certificate_status_t tls_verify_peers(gnutls_session_t tlsstate)
 {
-  int verify_ret;
-  unsigned int status;
-
-  verify_ret = gnutls_certificate_verify_peers2(tlsstate, &status);
-  if (!verify_ret)
+  unsigned int status = 0;
+  int verify_ret = gnutls_certificate_verify_peers2(tlsstate, &status);
+  if (verify_ret == 0)
     return status;
 
   if (status == GNUTLS_E_NO_CERTIFICATE_FOUND)
@@ -250,22 +153,22 @@ static gnutls_certificate_status_t tls_verify_peers(gnutls_session_t tlsstate)
 
 /**
  * tls_fingerprint - Create a fingerprint of a TLS Certificate
- * @param algo Fingerprint algorithm, e.g. GNUTLS_MAC_SHA256
- * @param s    Buffer for the fingerprint
- * @param l    Length of the buffer
+ * @param algo   Fingerprint algorithm, e.g. GNUTLS_MAC_SHA256
+ * @param buf    Buffer for the fingerprint
+ * @param buflen Length of the buffer
  * @param data Certificate
  */
-static void tls_fingerprint(gnutls_digest_algorithm_t algo, char *s, int l,
-                            const gnutls_datum_t *data)
+static void tls_fingerprint(gnutls_digest_algorithm_t algo, char *buf,
+                            size_t buflen, const gnutls_datum_t *data)
 {
-  unsigned char md[36];
+  unsigned char md[64];
   size_t n;
 
-  n = 36;
+  n = 64;
 
   if (gnutls_fingerprint(algo, data, (char *) md, &n) < 0)
   {
-    snprintf(s, l, _("[unable to calculate]"));
+    snprintf(buf, buflen, _("[unable to calculate]"));
   }
   else
   {
@@ -273,9 +176,9 @@ static void tls_fingerprint(gnutls_digest_algorithm_t algo, char *s, int l,
     {
       char ch[8];
       snprintf(ch, 8, "%02X%s", md[i], ((i % 2) ? " " : ""));
-      mutt_str_strcat(s, l, ch);
+      mutt_str_strcat(buf, buflen, ch);
     }
-    s[2 * n + n / 2 - 1] = '\0'; /* don't want trailing space */
+    buf[2 * n + n / 2 - 1] = '\0'; /* don't want trailing space */
   }
 }
 
@@ -295,11 +198,11 @@ static int tls_check_stored_hostname(const gnutls_datum_t *cert, const char *hos
   regmatch_t pmatch[3];
 
   /* try checking against names stored in stored certs file */
-  FILE *fp = fopen(CertificateFile, "r");
+  FILE *fp = fopen(C_CertificateFile, "r");
   if (fp)
   {
-    if (REGCOMP(&preg, "^#H ([a-zA-Z0-9_\\.-]+) ([0-9A-F]{4}( [0-9A-F]{4}){7})[ \t]*$",
-                REG_ICASE) != 0)
+    if (REG_COMP(&preg, "^#H ([a-zA-Z0-9_\\.-]+) ([0-9A-F]{4}( [0-9A-F]{4}){7})[ \t]*$",
+                 REG_ICASE) != 0)
     {
       mutt_file_fclose(&fp);
       return 0;
@@ -308,9 +211,9 @@ static int tls_check_stored_hostname(const gnutls_datum_t *cert, const char *hos
     char buf[80];
     buf[0] = '\0';
     tls_fingerprint(GNUTLS_DIG_MD5, buf, sizeof(buf), cert);
-    while ((linestr = mutt_file_read_line(linestr, &linestrsize, fp, &linenum, 0)) != NULL)
+    while ((linestr = mutt_file_read_line(linestr, &linestrsize, fp, &linenum, 0)))
     {
-      if (linestr[0] == '#' && linestr[1] == 'H')
+      if ((linestr[0] == '#') && (linestr[1] == 'H'))
       {
         if (regexec(&preg, linestr, 3, pmatch, 0) == 0)
         {
@@ -337,7 +240,7 @@ static int tls_check_stored_hostname(const gnutls_datum_t *cert, const char *hos
 }
 
 /**
- * tls_compare_certificates - Compare certificates against CertificateFile
+ * tls_compare_certificates - Compare certificates against #C_CertificateFile
  * @param peercert Certificate
  * @retval 1 Certificate matches file
  * @retval 0 Error, or no match
@@ -346,27 +249,23 @@ static int tls_compare_certificates(const gnutls_datum_t *peercert)
 {
   gnutls_datum_t cert;
   unsigned char *ptr = NULL;
-  FILE *fd1 = NULL;
   gnutls_datum_t b64_data;
   unsigned char *b64_data_data = NULL;
   struct stat filestat;
 
-  if (stat(CertificateFile, &filestat) == -1)
+  if (stat(C_CertificateFile, &filestat) == -1)
     return 0;
 
-  b64_data.size = filestat.st_size + 1;
-  b64_data_data = mutt_mem_calloc(1, b64_data.size);
-  b64_data_data[b64_data.size - 1] = '\0';
+  b64_data.size = filestat.st_size;
+  b64_data_data = mutt_mem_calloc(1, b64_data.size + 1);
   b64_data.data = b64_data_data;
 
-  fd1 = fopen(CertificateFile, "r");
-  if (!fd1)
-  {
+  FILE *fp = fopen(C_CertificateFile, "r");
+  if (!fp)
     return 0;
-  }
 
-  b64_data.size = fread(b64_data.data, 1, b64_data.size, fd1);
-  mutt_file_fclose(&fd1);
+  b64_data.size = fread(b64_data.data, 1, b64_data.size, fp);
+  mutt_file_fclose(&fp);
 
   do
   {
@@ -443,19 +342,29 @@ static int tls_check_preauth(const gnutls_datum_t *certdata,
     return -1;
   }
 
-  if (SslVerifyDates != MUTT_NO)
+  /* Note: tls_negotiate() contains a call to
+   * gnutls_certificate_set_verify_flags() with a flag disabling
+   * GnuTLS checking of the dates.  So certstat shouldn't have the
+   * GNUTLS_CERT_EXPIRED and GNUTLS_CERT_NOT_ACTIVATED bits set. */
+  if (C_SslVerifyDates != MUTT_NO)
   {
-    if (gnutls_x509_crt_get_expiration_time(cert) < time(NULL))
+    if (gnutls_x509_crt_get_expiration_time(cert) < mutt_date_epoch())
       *certerr |= CERTERR_EXPIRED;
-    if (gnutls_x509_crt_get_activation_time(cert) > time(NULL))
+    if (gnutls_x509_crt_get_activation_time(cert) > mutt_date_epoch())
       *certerr |= CERTERR_NOTYETVALID;
   }
 
-  if (chainidx == 0 && SslVerifyHost != MUTT_NO &&
+  if ((chainidx == 0) && (C_SslVerifyHost != MUTT_NO) &&
       !gnutls_x509_crt_check_hostname(cert, hostname) &&
       !tls_check_stored_hostname(certdata, hostname))
   {
     *certerr |= CERTERR_HOSTNAME;
+  }
+
+  if (certstat & GNUTLS_CERT_REVOKED)
+  {
+    *certerr |= CERTERR_REVOKED;
+    certstat ^= GNUTLS_CERT_REVOKED;
   }
 
   /* see whether certificate is in our cache (certificates file) */
@@ -463,41 +372,14 @@ static int tls_check_preauth(const gnutls_datum_t *certdata,
   {
     *savedcert = 1;
 
-    if (chainidx == 0 && (certstat & GNUTLS_CERT_INVALID))
+    /* We check above for certs with bad dates or that are revoked.
+     * These must be accepted manually each time.  Otherwise, we
+     * accept saved certificates as valid. */
+    if (*certerr == CERTERR_VALID)
     {
-      /* doesn't matter - have decided is valid because server
-       certificate is in our trusted cache */
-      certstat ^= GNUTLS_CERT_INVALID;
+      gnutls_x509_crt_deinit(cert);
+      return 0;
     }
-
-    if (chainidx == 0 && (certstat & GNUTLS_CERT_SIGNER_NOT_FOUND))
-    {
-      /* doesn't matter that we haven't found the signer, since
-       certificate is in our trusted cache */
-      certstat ^= GNUTLS_CERT_SIGNER_NOT_FOUND;
-    }
-
-    if (chainidx <= 1 && (certstat & GNUTLS_CERT_SIGNER_NOT_CA))
-    {
-      /* Hmm. Not really sure how to handle this, but let's say
-       that we don't care if the CA certificate hasn't got the
-       correct X.509 basic constraints if server or first signer
-       certificate is in our cache. */
-      certstat ^= GNUTLS_CERT_SIGNER_NOT_CA;
-    }
-
-    if (chainidx == 0 && (certstat & GNUTLS_CERT_INSECURE_ALGORITHM))
-    {
-      /* doesn't matter that it was signed using an insecure
-         algorithm, since certificate is in our trusted cache */
-      certstat ^= GNUTLS_CERT_INSECURE_ALGORITHM;
-    }
-  }
-
-  if (certstat & GNUTLS_CERT_REVOKED)
-  {
-    *certerr |= CERTERR_REVOKED;
-    certstat ^= GNUTLS_CERT_REVOKED;
   }
 
   if (certstat & GNUTLS_CERT_INVALID)
@@ -527,12 +409,15 @@ static int tls_check_preauth(const gnutls_datum_t *certdata,
     certstat ^= GNUTLS_CERT_INSECURE_ALGORITHM;
   }
 
+  /* we've been zeroing the interesting bits in certstat -
+   * don't return OK if there are any unhandled bits we don't
+   * understand */
+  if (certstat != 0)
+    *certerr |= CERTERR_OTHER;
+
   gnutls_x509_crt_deinit(cert);
 
-  /* we've been zeroing the interesting bits in certstat -
-   don't return OK if there are any unhandled bits we don't
-   understand */
-  if (*certerr == CERTERR_VALID && certstat == 0)
+  if (*certerr == CERTERR_VALID)
     return 0;
 
   return -1;
@@ -554,38 +439,28 @@ static int tls_check_one_certificate(const gnutls_datum_t *certdata,
 {
   int certerr, savedcert;
   gnutls_x509_crt_t cert;
-  char buf[SHORT_STRING];
-  char fpbuf[SHORT_STRING];
+  char buf[128];
+  char fpbuf[128];
   size_t buflen;
-  char dn_common_name[SHORT_STRING];
-  char dn_email[SHORT_STRING];
-  char dn_organization[SHORT_STRING];
-  char dn_organizational_unit[SHORT_STRING];
-  char dn_locality[SHORT_STRING];
-  char dn_province[SHORT_STRING];
-  char dn_country[SHORT_STRING];
+  char dn_common_name[128];
+  char dn_email[128];
+  char dn_organization[128];
+  char dn_organizational_unit[128];
+  char dn_locality[128];
+  char dn_province[128];
+  char dn_country[128];
   time_t t;
   char datestr[30];
   struct Menu *menu = NULL;
-  char helpstr[LONG_STRING];
-  char title[STRING];
+  char helpstr[1024];
+  char title[256];
   FILE *fp = NULL;
   gnutls_datum_t pemdata;
-  int row, done, ret;
+  int done, ret;
+  bool reset_ignoremacro = false;
 
   if (tls_check_preauth(certdata, certstat, hostname, idx, &certerr, &savedcert) == 0)
     return 1;
-
-  /* skip signers if insecure algorithm was used */
-  if (idx && (certerr & CERTERR_INSECUREALG))
-  {
-    if (idx == 1)
-    {
-      mutt_error(_("Warning: Server certificate was signed using an insecure "
-                   "algorithm"));
-    }
-    return 0;
-  }
 
   /* interactive check from user */
   if (gnutls_x509_crt_init(&cert) < 0)
@@ -601,16 +476,10 @@ static int tls_check_one_certificate(const gnutls_datum_t *certdata,
     return 0;
   }
 
-  menu = mutt_menu_new(MENU_GENERIC);
-  menu->max = 25;
-  menu->dialog = mutt_mem_calloc(1, menu->max * sizeof(char *));
-  for (int i = 0; i < menu->max; i++)
-    menu->dialog[i] = mutt_mem_calloc(1, SHORT_STRING * sizeof(char));
-  mutt_menu_push_current(menu);
+  struct Buffer *drow = mutt_buffer_pool_get();
 
-  row = 0;
-  mutt_str_strfcpy(menu->dialog[row], _("This certificate belongs to:"), SHORT_STRING);
-  row++;
+  menu = mutt_menu_new(MENU_GENERIC);
+  mutt_menu_push_current(menu);
 
   buflen = sizeof(dn_common_name);
   if (gnutls_x509_crt_get_dn_by_oid(cert, GNUTLS_OID_X520_COMMON_NAME, 0, 0,
@@ -652,15 +521,15 @@ static int tls_check_one_certificate(const gnutls_datum_t *certdata,
     dn_country[0] = '\0';
   }
 
-  snprintf(menu->dialog[row++], SHORT_STRING, "   %s  %s", dn_common_name, dn_email);
-  snprintf(menu->dialog[row++], SHORT_STRING, "   %s", dn_organization);
-  snprintf(menu->dialog[row++], SHORT_STRING, "   %s", dn_organizational_unit);
-  snprintf(menu->dialog[row++], SHORT_STRING, "   %s  %s  %s", dn_locality,
-           dn_province, dn_country);
-  row++;
-
-  mutt_str_strfcpy(menu->dialog[row], _("This certificate was issued by:"), SHORT_STRING);
-  row++;
+  mutt_menu_add_dialog_row(menu, _("This certificate belongs to:"));
+  mutt_buffer_printf(drow, "   %s  %s", dn_common_name, dn_email);
+  mutt_menu_add_dialog_row(menu, mutt_b2s(drow));
+  mutt_buffer_printf(drow, "   %s", dn_organization);
+  mutt_menu_add_dialog_row(menu, mutt_b2s(drow));
+  mutt_buffer_printf(drow, "   %s", dn_organizational_unit);
+  mutt_menu_add_dialog_row(menu, mutt_b2s(drow));
+  mutt_buffer_printf(drow, "   %s  %s  %s", dn_locality, dn_province, dn_country);
+  mutt_menu_add_dialog_row(menu, mutt_b2s(drow));
 
   buflen = sizeof(dn_common_name);
   if (gnutls_x509_crt_get_issuer_dn_by_oid(cert, GNUTLS_OID_X520_COMMON_NAME, 0,
@@ -705,87 +574,99 @@ static int tls_check_one_certificate(const gnutls_datum_t *certdata,
     dn_country[0] = '\0';
   }
 
-  snprintf(menu->dialog[row++], SHORT_STRING, "   %s  %s", dn_common_name, dn_email);
-  snprintf(menu->dialog[row++], SHORT_STRING, "   %s", dn_organization);
-  snprintf(menu->dialog[row++], SHORT_STRING, "   %s", dn_organizational_unit);
-  snprintf(menu->dialog[row++], SHORT_STRING, "   %s  %s  %s", dn_locality,
-           dn_province, dn_country);
-  row++;
+  mutt_menu_add_dialog_row(menu, "");
+  mutt_menu_add_dialog_row(menu, _("This certificate was issued by:"));
+  mutt_buffer_printf(drow, "   %s  %s", dn_common_name, dn_email);
+  mutt_menu_add_dialog_row(menu, mutt_b2s(drow));
+  mutt_buffer_printf(drow, "   %s", dn_organization);
+  mutt_menu_add_dialog_row(menu, mutt_b2s(drow));
+  mutt_buffer_printf(drow, "   %s", dn_organizational_unit);
+  mutt_menu_add_dialog_row(menu, mutt_b2s(drow));
+  mutt_buffer_printf(drow, "   %s  %s  %s", dn_locality, dn_province, dn_country);
+  mutt_menu_add_dialog_row(menu, mutt_b2s(drow));
 
-  snprintf(menu->dialog[row++], SHORT_STRING, _("This certificate is valid"));
+  mutt_menu_add_dialog_row(menu, "");
+  mutt_menu_add_dialog_row(menu, _("This certificate is valid"));
 
   t = gnutls_x509_crt_get_activation_time(cert);
   mutt_date_make_tls(datestr, sizeof(datestr), t);
-  snprintf(menu->dialog[row++], SHORT_STRING, _("   from %s"), datestr);
+  mutt_buffer_printf(drow, _("   from %s"), datestr);
 
   t = gnutls_x509_crt_get_expiration_time(cert);
   mutt_date_make_tls(datestr, sizeof(datestr), t);
-  snprintf(menu->dialog[row++], SHORT_STRING, _("     to %s"), datestr);
+  mutt_buffer_printf(drow, _("     to %s"), datestr);
+  mutt_menu_add_dialog_row(menu, mutt_b2s(drow));
 
   fpbuf[0] = '\0';
   tls_fingerprint(GNUTLS_DIG_SHA, fpbuf, sizeof(fpbuf), certdata);
-  snprintf(menu->dialog[row++], SHORT_STRING, _("SHA1 Fingerprint: %s"), fpbuf);
+  mutt_buffer_printf(drow, _("SHA1 Fingerprint: %s"), fpbuf);
+  mutt_menu_add_dialog_row(menu, mutt_b2s(drow));
   fpbuf[0] = '\0';
-  tls_fingerprint(GNUTLS_DIG_MD5, fpbuf, sizeof(fpbuf), certdata);
-  snprintf(menu->dialog[row++], SHORT_STRING, _("MD5 Fingerprint: %s"), fpbuf);
+  fpbuf[40] = '\0'; /* Ensure the second printed line is null terminated */
+  tls_fingerprint(GNUTLS_DIG_SHA256, fpbuf, sizeof(fpbuf), certdata);
+  fpbuf[39] = '\0'; /* Divide into two lines of output */
+  mutt_buffer_printf(drow, "%s%s", _("SHA256 Fingerprint: "), fpbuf);
+  mutt_menu_add_dialog_row(menu, mutt_b2s(drow));
+  mutt_buffer_printf(drow, "%*s%s", (int) mutt_str_strlen(_("SHA256 Fingerprint: ")),
+                     "", fpbuf + 40);
+  mutt_menu_add_dialog_row(menu, mutt_b2s(drow));
+
+  if (certerr)
+    mutt_menu_add_dialog_row(menu, "");
 
   if (certerr & CERTERR_NOTYETVALID)
   {
-    row++;
-    mutt_str_strfcpy(menu->dialog[row],
-                     _("WARNING: Server certificate is not yet valid"), SHORT_STRING);
+    mutt_menu_add_dialog_row(menu,
+                             _("WARNING: Server certificate is not yet valid"));
   }
   if (certerr & CERTERR_EXPIRED)
   {
-    row++;
-    mutt_str_strfcpy(menu->dialog[row],
-                     _("WARNING: Server certificate has expired"), SHORT_STRING);
+    mutt_menu_add_dialog_row(menu,
+                             _("WARNING: Server certificate has expired"));
   }
   if (certerr & CERTERR_REVOKED)
   {
-    row++;
-    mutt_str_strfcpy(menu->dialog[row],
-                     _("WARNING: Server certificate has been revoked"), SHORT_STRING);
+    mutt_menu_add_dialog_row(menu,
+                             _("WARNING: Server certificate has been revoked"));
   }
   if (certerr & CERTERR_HOSTNAME)
   {
-    row++;
-    mutt_str_strfcpy(menu->dialog[row],
-                     _("WARNING: Server hostname does not match certificate"), SHORT_STRING);
+    mutt_menu_add_dialog_row(
+        menu, _("WARNING: Server hostname does not match certificate"));
   }
   if (certerr & CERTERR_SIGNERNOTCA)
   {
-    row++;
-    mutt_str_strfcpy(menu->dialog[row],
-                     _("WARNING: Signer of server certificate is not a CA"), SHORT_STRING);
+    mutt_menu_add_dialog_row(
+        menu, _("WARNING: Signer of server certificate is not a CA"));
+  }
+  if (certerr & CERTERR_INSECUREALG)
+  {
+    mutt_menu_add_dialog_row(menu, _("Warning: Server certificate was signed "
+                                     "using an insecure algorithm"));
   }
 
   snprintf(title, sizeof(title),
            _("SSL Certificate check (certificate %zu of %zu in chain)"), len - idx, len);
   menu->title = title;
   /* certificates with bad dates, or that are revoked, must be
-   accepted manually each and every time */
-  if (CertificateFile && !savedcert &&
+   * accepted manually each and every time */
+  if (C_CertificateFile && !savedcert &&
       !(certerr & (CERTERR_EXPIRED | CERTERR_NOTYETVALID | CERTERR_REVOKED)))
   {
     menu->prompt = _("(r)eject, accept (o)nce, (a)ccept always");
-    /* L10N:
-   * These three letters correspond to the choices in the string:
-   * (r)eject, accept (o)nce, (a)ccept always.
-   * This is an interactive certificate confirmation prompt for
-   * a GNUTLS connection.
-   */
+    /* L10N: These three letters correspond to the choices in the string:
+       (r)eject, accept (o)nce, (a)ccept always.
+       This is an interactive certificate confirmation prompt for
+       a GNUTLS connection. */
     menu->keys = _("roa");
   }
   else
   {
     menu->prompt = _("(r)eject, accept (o)nce");
-    /* L10N:
-   * These two letters correspond to the choices in the string:
-   * (r)eject, accept (o)nce.
-   * These is an interactive certificate confirmation prompt for
-   * a GNUTLS connection.
-   */
+    /* L10N: These two letters correspond to the choices in the string:
+       (r)eject, accept (o)nce.
+       These is an interactive certificate confirmation prompt for
+       a GNUTLS connection. */
     menu->keys = _("ro");
   }
 
@@ -796,9 +677,14 @@ static int tls_check_one_certificate(const gnutls_datum_t *certdata,
   mutt_str_strcat(helpstr, sizeof(helpstr), buf);
   menu->help = helpstr;
 
+  if (!OptIgnoreMacroEvents)
+  {
+    OptIgnoreMacroEvents = true;
+    reset_ignoremacro = true;
+  }
+
   done = 0;
-  OptIgnoreMacroEvents = true;
-  while (!done)
+  while (done == 0)
   {
     switch (mutt_menu_loop(menu))
     {
@@ -809,16 +695,19 @@ static int tls_check_one_certificate(const gnutls_datum_t *certdata,
         break;
       case OP_MAX + 3: /* accept always */
         done = 0;
-        fp = mutt_file_fopen(CertificateFile, "a");
+        fp = mutt_file_fopen(C_CertificateFile, "a");
         if (fp)
         {
           /* save hostname if necessary */
           if (certerr & CERTERR_HOSTNAME)
           {
+            fpbuf[0] = '\0';
+            tls_fingerprint(GNUTLS_DIG_MD5, fpbuf, sizeof(fpbuf), certdata);
             fprintf(fp, "#H %s %s\n", hostname, fpbuf);
             done = 1;
           }
-          if (certerr & CERTERR_NOTTRUSTED)
+          /* Save the cert for all other errors */
+          if (certerr ^ CERTERR_HOSTNAME)
           {
             done = 0;
             ret = gnutls_pem_base64_encode_alloc("CERTIFICATE", certdata, &pemdata);
@@ -833,7 +722,7 @@ static int tls_check_one_certificate(const gnutls_datum_t *certdata,
           }
           mutt_file_fclose(&fp);
         }
-        if (!done)
+        if (done == 0)
         {
           mutt_error(_("Warning: Couldn't save certificate"));
         }
@@ -848,12 +737,15 @@ static int tls_check_one_certificate(const gnutls_datum_t *certdata,
         break;
     }
   }
-  OptIgnoreMacroEvents = false;
+  if (reset_ignoremacro)
+    OptIgnoreMacroEvents = false;
+
+  mutt_buffer_pool_release(&drow);
   mutt_menu_pop_current(menu);
-  mutt_menu_destroy(&menu);
+  mutt_menu_free(&menu);
   gnutls_x509_crt_deinit(cert);
 
-  return (done == 2);
+  return done == 2;
 }
 
 /**
@@ -869,7 +761,7 @@ static int tls_check_certificate(struct Connection *conn)
   const gnutls_datum_t *cert_list = NULL;
   unsigned int cert_list_size = 0;
   gnutls_certificate_status_t certstat;
-  int certerr, preauthrc, savedcert, rc = 0;
+  int certerr, savedcert, rc = 0;
   int rcpeer = -1; /* the result of tls_check_preauth() on the peer's EE cert */
 
   if (gnutls_auth_get_type(state) != GNUTLS_CRD_CERTIFICATE)
@@ -890,7 +782,7 @@ static int tls_check_certificate(struct Connection *conn)
   /* tls_verify_peers doesn't check hostname or expiration, so walk
    * from most specific to least checking these. If we see a saved certificate,
    * its status short-circuits the remaining checks. */
-  preauthrc = 0;
+  int preauthrc = 0;
   for (int i = 0; i < cert_list_size; i++)
   {
     rc = tls_check_preauth(&cert_list[i], certstat, conn->account.host, i,
@@ -899,14 +791,13 @@ static int tls_check_certificate(struct Connection *conn)
     if (i == 0)
     {
       /* This is the peer's end-entity X.509 certificate.  Stash the result
-       * to check later in this function.
-       */
+       * to check later in this function.  */
       rcpeer = rc;
     }
 
     if (savedcert)
     {
-      if (!preauthrc)
+      if (preauthrc == 0)
         return 1;
       else
         break;
@@ -924,12 +815,11 @@ static int tls_check_certificate(struct Connection *conn)
     {
       rc = gnutls_certificate_set_x509_trust_mem(data->xcred, &cert_list[i], GNUTLS_X509_FMT_DER);
       if (rc != 1)
-        mutt_debug(1, "error trusting certificate %d: %d\n", i, rc);
+        mutt_debug(LL_DEBUG1, "error trusting certificate %d: %d\n", i, rc);
 
       certstat = tls_verify_peers(state);
       /* If the cert chain now verifies, and the peer's cert was otherwise
-       * valid (rcpeer==0), we are done.
-       */
+       * valid (rcpeer==0), we are done.  */
       if (!certstat && !rcpeer)
         return 1;
     }
@@ -958,12 +848,12 @@ static void tls_get_client_cert(struct Connection *conn)
 
   if (gnutls_x509_crt_init(&clientcrt) < 0)
   {
-    mutt_debug(1, "Failed to init gnutls crt\n");
+    mutt_debug(LL_DEBUG1, "Failed to init gnutls crt\n");
     return;
   }
   if (gnutls_x509_crt_import(clientcrt, crtdata, GNUTLS_X509_FMT_DER) < 0)
   {
-    mutt_debug(1, "Failed to import gnutls client crt\n");
+    mutt_debug(LL_DEBUG1, "Failed to import gnutls client crt\n");
     goto err_crt;
   }
   /* get length of DN */
@@ -972,13 +862,13 @@ static void tls_get_client_cert(struct Connection *conn)
   dn = mutt_mem_calloc(1, dnlen);
 
   gnutls_x509_crt_get_dn(clientcrt, dn, &dnlen);
-  mutt_debug(2, "client certificate DN: %s\n", dn);
+  mutt_debug(LL_DEBUG2, "client certificate DN: %s\n", dn);
 
   /* extract CN to use as external user name */
   cn = strstr(dn, "CN=");
   if (!cn)
   {
-    mutt_debug(1, "no CN found in DN\n");
+    mutt_debug(LL_DEBUG1, "no CN found in DN\n");
     goto err_dn;
   }
 
@@ -988,7 +878,7 @@ static void tls_get_client_cert(struct Connection *conn)
 
   /* if we are using a client cert, SASL may expect an external auth name */
   if (mutt_account_getuser(&conn->account) < 0)
-    mutt_debug(1, "Couldn't get user info\n");
+    mutt_debug(LL_DEBUG1, "Couldn't get user info\n");
 
 err_dn:
   FREE(&dn);
@@ -1005,61 +895,70 @@ err_crt:
  */
 static int tls_set_priority(struct TlsSockData *data)
 {
-  size_t nproto = 4;
-  size_t priority_size;
+  size_t nproto = 5;
+  int rv = -1;
 
-  priority_size = SHORT_STRING + mutt_str_strlen(SslCiphers);
-  char *priority = mutt_mem_malloc(priority_size);
+  struct Buffer *priority = mutt_buffer_pool_get();
 
-  priority[0] = 0;
-  if (SslCiphers)
-    mutt_str_strcat(priority, priority_size, SslCiphers);
+  if (C_SslCiphers)
+    mutt_buffer_strcpy(priority, C_SslCiphers);
   else
-    mutt_str_strcat(priority, priority_size, "NORMAL");
+    mutt_buffer_strcpy(priority, "NORMAL");
 
-  if (!SslUseTlsv12)
+  if (!C_SslUseTlsv13)
   {
     nproto--;
-    mutt_str_strcat(priority, priority_size, ":-VERS-TLS1.2");
+    mutt_buffer_addstr(priority, ":-VERS-TLS1.3");
   }
-  if (!SslUseTlsv11)
+  if (!C_SslUseTlsv12)
   {
     nproto--;
-    mutt_str_strcat(priority, priority_size, ":-VERS-TLS1.1");
+    mutt_buffer_addstr(priority, ":-VERS-TLS1.2");
   }
-  if (!SslUseTlsv1)
+  if (!C_SslUseTlsv11)
   {
     nproto--;
-    mutt_str_strcat(priority, priority_size, ":-VERS-TLS1.0");
+    mutt_buffer_addstr(priority, ":-VERS-TLS1.1");
   }
-  if (!SslUseSslv3)
+  if (!C_SslUseTlsv1)
   {
     nproto--;
-    mutt_str_strcat(priority, priority_size, ":-VERS-SSL3.0");
+    mutt_buffer_addstr(priority, ":-VERS-TLS1.0");
+  }
+  if (!C_SslUseSslv3)
+  {
+    nproto--;
+    mutt_buffer_addstr(priority, ":-VERS-SSL3.0");
   }
 
   if (nproto == 0)
   {
     mutt_error(_("All available protocols for TLS/SSL connection disabled"));
-    FREE(&priority);
-    return -1;
+    goto cleanup;
   }
 
-  int err = gnutls_priority_set_direct(data->state, priority, NULL);
+  int err = gnutls_priority_set_direct(data->state, mutt_b2s(priority), NULL);
   if (err < 0)
   {
-    mutt_error("gnutls_priority_set_direct(%s): %s", priority, gnutls_strerror(err));
-    FREE(&priority);
-    return -1;
+    mutt_error("gnutls_priority_set_direct(%s): %s", mutt_b2s(priority),
+               gnutls_strerror(err));
+    goto cleanup;
   }
 
-  FREE(&priority);
-  return 0;
+  rv = 0;
+
+cleanup:
+  mutt_buffer_pool_release(&priority);
+  return rv;
 }
 #else
 /* This array needs to be large enough to hold all the possible values support
  * by NeoMutt.  The initialized values are just placeholders--the array gets
- * overwritten in tls_negotiate() depending on the $ssl_use_* options.
+ * overwrriten in tls_negotiate() depending on the $ssl_use_* options.
+ *
+ * Note: gnutls_protocol_set_priority() was removed in GnuTLS version
+ * 3.4 (2015-04).  TLS 1.3 support wasn't added until version 3.6.5.
+ * Therefore, no attempt is made to support $ssl_use_tlsv1_3 in this code.
  */
 static int protocol_priority[] = { GNUTLS_TLS1_2, GNUTLS_TLS1_1, GNUTLS_TLS1,
                                    GNUTLS_SSL3, 0 };
@@ -1074,13 +973,13 @@ static int tls_set_priority(struct TlsSockData *data)
 {
   size_t nproto = 0; /* number of tls/ssl protocols */
 
-  if (SslUseTlsv12)
+  if (C_SslUseTlsv12)
     protocol_priority[nproto++] = GNUTLS_TLS1_2;
-  if (SslUseTlsv11)
+  if (C_SslUseTlsv11)
     protocol_priority[nproto++] = GNUTLS_TLS1_1;
-  if (SslUseTlsv1)
+  if (C_SslUseTlsv1)
     protocol_priority[nproto++] = GNUTLS_TLS1;
-  if (SslUseSslv3)
+  if (C_SslUseSslv3)
     protocol_priority[nproto++] = GNUTLS_SSL3;
   protocol_priority[nproto] = 0;
 
@@ -1090,14 +989,20 @@ static int tls_set_priority(struct TlsSockData *data)
     return -1;
   }
 
-  if (SslCiphers)
+  if (C_SslCiphers)
   {
     mutt_error(
         _("Explicit ciphersuite selection via $ssl_ciphers not supported"));
   }
+  if (certerr & CERTERR_INSECUREALG)
+  {
+    row++;
+    strfcpy(menu->dialog[row], _("Warning: Server certificate was signed using an insecure algorithm"),
+            dialog_row_len);
+  }
 
   /* We use default priorities (see gnutls documentation),
-     except for protocol version */
+   * except for protocol version */
   gnutls_set_default_priority(data->state);
   gnutls_protocol_set_priority(data->state, protocol_priority);
   return 0;
@@ -1125,25 +1030,25 @@ static int tls_negotiate(struct Connection *conn)
     return -1;
   }
 
-  gnutls_certificate_set_x509_trust_file(data->xcred, CertificateFile, GNUTLS_X509_FMT_PEM);
+  gnutls_certificate_set_x509_trust_file(data->xcred, C_CertificateFile, GNUTLS_X509_FMT_PEM);
   /* ignore errors, maybe file doesn't exist yet */
 
-  if (SslCaCertificatesFile)
+  if (C_SslCaCertificatesFile)
   {
-    gnutls_certificate_set_x509_trust_file(data->xcred, SslCaCertificatesFile,
+    gnutls_certificate_set_x509_trust_file(data->xcred, C_SslCaCertificatesFile,
                                            GNUTLS_X509_FMT_PEM);
   }
 
-  if (SslClientCert)
+  if (C_SslClientCert)
   {
-    mutt_debug(2, "Using client certificate %s\n", SslClientCert);
-    gnutls_certificate_set_x509_key_file(data->xcred, SslClientCert,
-                                         SslClientCert, GNUTLS_X509_FMT_PEM);
+    mutt_debug(LL_DEBUG2, "Using client certificate %s\n", C_SslClientCert);
+    gnutls_certificate_set_x509_key_file(data->xcred, C_SslClientCert,
+                                         C_SslClientCert, GNUTLS_X509_FMT_PEM);
   }
 
 #ifdef HAVE_DECL_GNUTLS_VERIFY_DISABLE_TIME_CHECKS
   /* disable checking certificate activation/expiration times
-     in gnutls, we do the checks ourselves */
+   * in gnutls, we do the checks ourselves */
   gnutls_certificate_set_verify_flags(data->xcred, GNUTLS_VERIFY_DISABLE_TIME_CHECKS);
 #endif
 
@@ -1168,9 +1073,9 @@ static int tls_negotiate(struct Connection *conn)
     goto fail;
   }
 
-  if (SslMinDhPrimeBits > 0)
+  if (C_SslMinDhPrimeBits > 0)
   {
-    gnutls_dh_set_prime_bits(data->state, SslMinDhPrimeBits);
+    gnutls_dh_set_prime_bits(data->state, C_SslMinDhPrimeBits);
   }
 
   /* gnutls_set_cred (data->state, GNUTLS_ANON, NULL); */
@@ -1226,10 +1131,20 @@ fail:
 }
 
 /**
- * tls_socket_open - Open a TLS socket
- * @param conn Connection to a server
- * @retval  0 Success
- * @retval -1 Error
+ * tls_socket_poll - Check whether a socket read would block - Implements Connection::conn_poll()
+ */
+static int tls_socket_poll(struct Connection *conn, time_t wait_secs)
+{
+  struct TlsSockData *data = conn->sockdata;
+
+  if (gnutls_record_check_pending(data->state))
+    return 1;
+  else
+    return raw_socket_poll(conn, wait_secs);
+}
+
+/**
+ * tls_socket_open - Open a TLS socket - Implements Connection::conn_open()
  */
 static int tls_socket_open(struct Connection *conn)
 {
@@ -1243,6 +1158,92 @@ static int tls_socket_open(struct Connection *conn)
   }
 
   return 0;
+}
+
+/**
+ * tls_socket_read - Read data from a TLS socket - Implements Connection::conn_read()
+ */
+static int tls_socket_read(struct Connection *conn, char *buf, size_t count)
+{
+  struct TlsSockData *data = conn->sockdata;
+  if (!data)
+  {
+    mutt_error(_("Error: no TLS socket open"));
+    return -1;
+  }
+
+  int rc;
+  do
+  {
+    rc = gnutls_record_recv(data->state, buf, count);
+  } while ((rc == GNUTLS_E_AGAIN) || (rc == GNUTLS_E_INTERRUPTED));
+
+  if (rc < 0)
+  {
+    mutt_error("tls_socket_read (%s)", gnutls_strerror(rc));
+    return -1;
+  }
+
+  return rc;
+}
+
+/**
+ * tls_socket_write - Write data to a TLS socket - Implements Connection::conn_write()
+ */
+static int tls_socket_write(struct Connection *conn, const char *buf, size_t count)
+{
+  struct TlsSockData *data = conn->sockdata;
+  size_t sent = 0;
+
+  if (!data)
+  {
+    mutt_error(_("Error: no TLS socket open"));
+    return -1;
+  }
+
+  do
+  {
+    int ret;
+    do
+    {
+      ret = gnutls_record_send(data->state, buf + sent, count - sent);
+    } while ((ret == GNUTLS_E_AGAIN) || (ret == GNUTLS_E_INTERRUPTED));
+
+    if (ret < 0)
+    {
+      mutt_error("tls_socket_write (%s)", gnutls_strerror(ret));
+      return -1;
+    }
+
+    sent += ret;
+  } while (sent < count);
+
+  return sent;
+}
+
+/**
+ * tls_socket_close - Close a TLS socket - Implements Connection::conn_close()
+ */
+static int tls_socket_close(struct Connection *conn)
+{
+  struct TlsSockData *data = conn->sockdata;
+  if (data)
+  {
+    /* shut down only the write half to avoid hanging waiting for the remote to respond.
+     *
+     * RFC5246 7.2.1. "Closure Alerts"
+     *
+     * It is not required for the initiator of the close to wait for the
+     * responding close_notify alert before closing the read side of the
+     * connection.  */
+    gnutls_bye(data->state, GNUTLS_SHUT_WR);
+
+    gnutls_certificate_free_credentials(data->xcred);
+    gnutls_deinit(data->state);
+    FREE(&conn->sockdata);
+  }
+
+  return raw_socket_close(conn);
 }
 
 /**
@@ -1260,13 +1261,13 @@ int mutt_ssl_socket_setup(struct Connection *conn)
   conn->conn_read = tls_socket_read;
   conn->conn_write = tls_socket_write;
   conn->conn_close = tls_socket_close;
-  conn->conn_poll = raw_socket_poll;
+  conn->conn_poll = tls_socket_poll;
 
   return 0;
 }
 
 /**
- * mutt_ssl_starttls - Set up TLS multiplexor
+ * mutt_ssl_starttls - Negotiate TLS over an already opened connection
  * @param conn Connection to a server
  * @retval  0 Success
  * @retval -1 Error
@@ -1282,6 +1283,7 @@ int mutt_ssl_starttls(struct Connection *conn)
   conn->conn_read = tls_socket_read;
   conn->conn_write = tls_socket_write;
   conn->conn_close = tls_starttls_close;
+  conn->conn_poll = tls_socket_poll;
 
   return 0;
 }

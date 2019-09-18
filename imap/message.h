@@ -21,18 +21,16 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _IMAP_MESSAGE_H
-#define _IMAP_MESSAGE_H
+#ifndef MUTT_IMAP_MESSAGE_H
+#define MUTT_IMAP_MESSAGE_H
 
 #include <stdbool.h>
 #include <time.h>
 
 /**
- * struct ImapHeaderData - IMAP-specific header data
- *
- * IMAP-specific header data, stored as Header->data
+ * struct ImapEmailData - IMAP-specific Email data - @extends Email
  */
-struct ImapHeaderData
+struct ImapEmailData
 {
   /* server-side flags */
   bool read : 1;
@@ -40,7 +38,6 @@ struct ImapHeaderData
   bool deleted : 1;
   bool flagged : 1;
   bool replied : 1;
-  bool changed : 1;
 
   bool parsed : 1;
 
@@ -56,12 +53,10 @@ struct ImapHeaderData
  */
 struct ImapHeader
 {
-  struct ImapHeaderData *data;
+  struct ImapEmailData *edata;
 
   time_t received;
   long content_length;
 };
 
-#define HEADER_DATA(ph) ((struct ImapHeaderData *) ((ph)->data))
-
-#endif /* _IMAP_MESSAGE_H */
+#endif /* MUTT_IMAP_MESSAGE_H */

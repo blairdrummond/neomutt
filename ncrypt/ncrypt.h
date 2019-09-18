@@ -5,6 +5,7 @@
  * @authors
  * Copyright (C) 2003 Werner Koch <wk@gnupg.org>
  * Copyright (C) 2004 g10code GmbH
+ * Copyright (C) 2019 Pietro Cerutti <gahr@gahr.ch>
  *
  * @copyright
  * This program is free software: you can redistribute it and/or modify it under
@@ -22,7 +23,7 @@
  */
 
 /**
- * @page ncrypt Encrypt/decrypt/sign/verify emails
+ * @page ncrypt NCRYPT: Encrypt/decrypt/sign/verify emails
  *
  * Encrypt/decrypt/sign/verify emails
  *
@@ -46,49 +47,109 @@
  * | ncrypt/smime.c                   | @subpage crypt_smime                 |
  */
 
-#ifndef _NCRYPT_NCRYPT_H
-#define _NCRYPT_NCRYPT_H
+#ifndef MUTT_NCRYPT_NCRYPT_H
+#define MUTT_NCRYPT_NCRYPT_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 
 struct Address;
 struct Body;
 struct Envelope;
-struct Header;
+struct Email;
+struct EmailList;
+struct Mailbox;
 struct State;
 
-/* FIXME: They should be pointer to anonymous structures for better
-   information hiding. */
+/* These Config Variables are only used in ncrypt/crypt.c */
+extern bool          C_CryptTimestamp;
+extern unsigned char C_PgpEncryptSelf; ///< Deprecated, see #C_PgpSelfEncrypt
+extern unsigned char C_PgpMimeAuto;
+extern bool          C_PgpRetainableSigs;
+extern bool          C_PgpSelfEncrypt;
+extern bool          C_PgpStrictEnc;
+extern unsigned char C_SmimeEncryptSelf; ///< Deprecated, see #C_SmimeSelfEncrypt
+extern bool          C_SmimeSelfEncrypt;
 
-#define ENCRYPT    (1 << 0)
-#define SIGN       (1 << 1)
-#define GOODSIGN   (1 << 2)
-#define BADSIGN    (1 << 3)
-#define PARTSIGN   (1 << 4)
-#define SIGNOPAQUE (1 << 5)
-#define KEYBLOCK   (1 << 6) /* KEY too generic? */
-#define INLINE     (1 << 7)
-#define OPPENCRYPT (1 << 8) /* Opportunistic encrypt mode */
+/* These Config Variables are only used in ncrypt/cryptglue.c */
+extern bool C_CryptUseGpgme;
 
-#define APPLICATION_PGP   (1 << 9)
-#define APPLICATION_SMIME (1 << 10)
+/* These Config Variables are only used in ncrypt/pgp.c */
+extern bool          C_PgpCheckExit;
+extern bool          C_PgpCheckGpgDecryptStatusFd;
+extern struct Regex *C_PgpDecryptionOkay;
+extern struct Regex *C_PgpGoodSign;
+extern long          C_PgpTimeout;
+extern bool          C_PgpUseGpgAgent;
 
-#define PGP_TRADITIONAL_CHECKED (1 << 11)
+/* These Config Variables are only used in ncrypt/pgpinvoke.c */
+extern char *C_PgpClearsignCommand;
+extern char *C_PgpDecodeCommand;
+extern char *C_PgpDecryptCommand;
+extern char *C_PgpEncryptOnlyCommand;
+extern char *C_PgpEncryptSignCommand;
+extern char *C_PgpExportCommand;
+extern char *C_PgpGetkeysCommand;
+extern char *C_PgpImportCommand;
+extern char *C_PgpListPubringCommand;
+extern char *C_PgpListSecringCommand;
+extern char *C_PgpSignCommand;
+extern char *C_PgpVerifyCommand;
+extern char *C_PgpVerifyKeyCommand;
 
-#define PGPENCRYPT  (APPLICATION_PGP | ENCRYPT)
-#define PGPSIGN     (APPLICATION_PGP | SIGN)
-#define PGPGOODSIGN (APPLICATION_PGP | GOODSIGN)
-#define PGPKEY      (APPLICATION_PGP | KEYBLOCK)
-#define PGPINLINE   (APPLICATION_PGP | INLINE)
+/* These Config Variables are only used in ncrypt/smime.c */
+extern bool  C_SmimeAskCertLabel;
+extern char *C_SmimeCaLocation;
+extern char *C_SmimeCertificates;
+extern char *C_SmimeDecryptCommand;
+extern bool  C_SmimeDecryptUseDefaultKey;
+extern char *C_SmimeEncryptCommand;
+extern char *C_SmimeGetCertCommand;
+extern char *C_SmimeGetCertEmailCommand;
+extern char *C_SmimeGetSignerCertCommand;
+extern char *C_SmimeImportCertCommand;
+extern char *C_SmimeKeys;
+extern char *C_SmimePk7outCommand;
+extern char *C_SmimeSignCommand;
+extern char *C_SmimeSignDigestAlg;
+extern long  C_SmimeTimeout;
+extern char *C_SmimeVerifyCommand;
+extern char *C_SmimeVerifyOpaqueCommand;
 
-#define SMIMEENCRYPT  (APPLICATION_SMIME | ENCRYPT)
-#define SMIMESIGN     (APPLICATION_SMIME | SIGN)
-#define SMIMEGOODSIGN (APPLICATION_SMIME | GOODSIGN)
-#define SMIMEBADSIGN  (APPLICATION_SMIME | BADSIGN)
-#define SMIMEOPAQUE   (APPLICATION_SMIME | SIGNOPAQUE)
+typedef uint16_t SecurityFlags;           ///< Flags, e.g. #SEC_ENCRYPT
+#define SEC_NO_FLAGS                  0   ///< No flags are set
+#define SEC_ENCRYPT             (1 << 0)  ///< Email is encrypted
+#define SEC_SIGN                (1 << 1)  ///< Email is signed
+#define SEC_GOODSIGN            (1 << 2)  ///< Email has a valid signature
+#define SEC_BADSIGN             (1 << 3)  ///< Email has a bad signature
+#define SEC_PARTSIGN            (1 << 4)  ///< Not all parts of the email is signed
+#define SEC_SIGNOPAQUE          (1 << 5)  ///< Email has an opaque signature (encrypted)
+#define SEC_KEYBLOCK            (1 << 6)  ///< Email has a key attached
+#define SEC_INLINE              (1 << 7)  ///< Email has an inline signature
+#define SEC_OPPENCRYPT          (1 << 8)  ///< Opportunistic encrypt mode
+#define SEC_AUTOCRYPT           (1 << 9)  ///< Message will be, or was Autocrypt encrypt+signed
+#define SEC_AUTOCRYPT_OVERRIDE  (1 << 10) ///< Indicates manual set/unset of encryption
 
-/* WITHCRYPTO actually replaces ifdefs so make the code more readable.
+#define APPLICATION_PGP         (1 << 11) ///< Use PGP to encrypt/sign
+#define APPLICATION_SMIME       (1 << 12) ///< Use SMIME to encrypt/sign
+#define PGP_TRADITIONAL_CHECKED (1 << 13) ///< Email has a traditional (inline) signature
+
+#define SEC_ALL_FLAGS          ((1 << 14) - 1)
+
+#define PGP_ENCRYPT  (APPLICATION_PGP | SEC_ENCRYPT)
+#define PGP_SIGN     (APPLICATION_PGP | SEC_SIGN)
+#define PGP_GOODSIGN (APPLICATION_PGP | SEC_GOODSIGN)
+#define PGP_KEY      (APPLICATION_PGP | SEC_KEYBLOCK)
+#define PGP_INLINE   (APPLICATION_PGP | SEC_INLINE)
+
+#define SMIME_ENCRYPT  (APPLICATION_SMIME | SEC_ENCRYPT)
+#define SMIME_SIGN     (APPLICATION_SMIME | SEC_SIGN)
+#define SMIME_GOODSIGN (APPLICATION_SMIME | SEC_GOODSIGN)
+#define SMIME_BADSIGN  (APPLICATION_SMIME | SEC_BADSIGN)
+#define SMIME_OPAQUE   (APPLICATION_SMIME | SEC_SIGNOPAQUE)
+
+/* WITHCRYPTO actually replaces ifdefs to make the code more readable.
  * Because it is defined as a constant and known at compile time, the
  * compiler can do dead code elimination and thus it behaves
  * effectively as a conditional compile directive. It is set to false
@@ -105,17 +166,19 @@ struct State;
 #define WithCrypto 0
 #endif
 
-#define KEYFLAG_CANSIGN           (1 << 0)
-#define KEYFLAG_CANENCRYPT        (1 << 1)
-#define KEYFLAG_ISX509            (1 << 2)
-#define KEYFLAG_SECRET            (1 << 7)
-#define KEYFLAG_EXPIRED           (1 << 8)
-#define KEYFLAG_REVOKED           (1 << 9)
-#define KEYFLAG_DISABLED          (1 << 10)
-#define KEYFLAG_SUBKEY            (1 << 11)
-#define KEYFLAG_CRITICAL          (1 << 12)
-#define KEYFLAG_PREFER_ENCRYPTION (1 << 13)
-#define KEYFLAG_PREFER_SIGNING    (1 << 14)
+typedef uint16_t KeyFlags;                  ///< Flags describing PGP/SMIME keys, e.g. #KEYFLAG_CANSIGN
+#define KEYFLAG_NO_FLAGS                0   ///< No flags are set
+#define KEYFLAG_CANSIGN           (1 << 0)  ///< Key is suitable for signing
+#define KEYFLAG_CANENCRYPT        (1 << 1)  ///< Key is suitable for encryption
+#define KEYFLAG_ISX509            (1 << 2)  ///< Key is an X.509 key
+#define KEYFLAG_SECRET            (1 << 7)  ///< Key is a secret key
+#define KEYFLAG_EXPIRED           (1 << 8)  ///< Key is expired
+#define KEYFLAG_REVOKED           (1 << 9)  ///< Key is revoked
+#define KEYFLAG_DISABLED          (1 << 10) ///< Key is marked disabled
+#define KEYFLAG_SUBKEY            (1 << 11) ///< Key is a subkey
+#define KEYFLAG_CRITICAL          (1 << 12) ///< Key is marked critical
+#define KEYFLAG_PREFER_ENCRYPTION (1 << 13) ///< Key's owner prefers encryption
+#define KEYFLAG_PREFER_SIGNING    (1 << 14) ///< Key's owner prefers signing
 
 #define KEYFLAG_CANTUSE (KEYFLAG_DISABLED | KEYFLAG_REVOKED | KEYFLAG_EXPIRED)
 #define KEYFLAG_RESTRICTIONS (KEYFLAG_CANTUSE | KEYFLAG_CRITICAL)
@@ -123,37 +186,42 @@ struct State;
 #define KEYFLAG_ABILITIES (KEYFLAG_CANSIGN | KEYFLAG_CANENCRYPT | KEYFLAG_PREFER_ENCRYPTION | KEYFLAG_PREFER_SIGNING)
 
 /* crypt.c */
-void         crypt_extract_keys_from_messages(struct Header *h);
+void         crypt_extract_keys_from_messages(struct Mailbox *m, struct EmailList *el);
 void         crypt_forget_passphrase(void);
-int          crypt_get_keys(struct Header *msg, char **keylist, bool oppenc_mode);
-void         crypt_opportunistic_encrypt(struct Header *msg);
-int          crypt_query(struct Body *m);
-int          crypt_valid_passphrase(int flags);
-int          mutt_is_application_pgp(struct Body *m);
-int          mutt_is_application_smime(struct Body *m);
-int          mutt_is_malformed_multipart_pgp_encrypted(struct Body *b);
-int          mutt_is_multipart_encrypted(struct Body *b);
-int          mutt_is_multipart_signed(struct Body *b);
+int          crypt_get_keys(struct Email *e, char **keylist, bool oppenc_mode);
+void         crypt_opportunistic_encrypt(struct Email *e);
+SecurityFlags crypt_query(struct Body *m);
+bool         crypt_valid_passphrase(SecurityFlags flags);
+SecurityFlags mutt_is_application_pgp(struct Body *m);
+SecurityFlags mutt_is_application_smime(struct Body *m);
+SecurityFlags mutt_is_malformed_multipart_pgp_encrypted(struct Body *b);
+SecurityFlags mutt_is_multipart_encrypted(struct Body *b);
+SecurityFlags mutt_is_multipart_signed(struct Body *b);
 int          mutt_is_valid_multipart_pgp_encrypted(struct Body *b);
-int          mutt_protect(struct Header *msg, char *keylist);
+int          mutt_protect(struct Email *e, char *keylist, bool postpone);
+int          mutt_protected_headers_handler(struct Body *m, struct State *s);
+bool         mutt_should_hide_protected_subject(struct Email *e);
 int          mutt_signed_handler(struct Body *a, struct State *s);
 
 /* cryptglue.c */
-bool         crypt_has_module_backend(int type);
+bool         crypt_has_module_backend(SecurityFlags type);
 void         crypt_init(void);
-void         crypt_invoke_message(int type);
+void         crypt_invoke_message(SecurityFlags type);
 int          crypt_pgp_application_handler(struct Body *m, struct State *s);
 int          crypt_pgp_check_traditional(FILE *fp, struct Body *b, bool just_one);
-int          crypt_pgp_decrypt_mime(FILE *a, FILE **b, struct Body *c, struct Body **d);
+int          crypt_pgp_decrypt_mime(FILE *fp_in, FILE **fp_out, struct Body *b, struct Body **cur);
 int          crypt_pgp_encrypted_handler(struct Body *a, struct State *s);
 void         crypt_pgp_extract_key_from_attachment(FILE *fp, struct Body *top);
 void         crypt_pgp_invoke_getkeys(struct Address *addr);
 struct Body *crypt_pgp_make_key_attachment(void);
-int          crypt_pgp_send_menu(struct Header *msg);
+int          crypt_pgp_send_menu(struct Email *e);
 int          crypt_smime_application_handler(struct Body *m, struct State *s);
-int          crypt_smime_decrypt_mime(FILE *a, FILE **b, struct Body *c, struct Body **d);
+int          crypt_smime_decrypt_mime(FILE *fp_in, FILE **fp_out, struct Body *b, struct Body **cur);
 void         crypt_smime_getkeys(struct Envelope *env);
-int          crypt_smime_send_menu(struct Header *msg);
-int          crypt_smime_verify_sender(struct Header *h);
+int          crypt_smime_send_menu(struct Email *e);
+int          crypt_smime_verify_sender(struct Mailbox *m, struct Email *e);
 
-#endif /* _NCRYPT_NCRYPT_H */
+/* crypt_mod.c */
+void crypto_module_free(void);
+
+#endif /* MUTT_NCRYPT_NCRYPT_H */

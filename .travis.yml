@@ -1,12 +1,7 @@
 notifications:
-  email:
-    recipients:
-      - rich@flatcap.org
-    on_success: change
-    on_failure: always
+  email: false
 
-sudo: false
-dist: trusty
+dist: bionic
 
 language: c
 compiler: gcc
@@ -21,9 +16,10 @@ addons:
       - gettext
       - libdb-dev
       - libgdbm-dev
-      - libgnutls-dev
+      - libgnutls28-dev
       - libgpgme11-dev
       - libgss-dev
+      - libidn2-0-dev
       - libkyotocabinet-dev
       - liblmdb-dev
       - liblua5.2-dev

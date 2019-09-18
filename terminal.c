@@ -29,7 +29,6 @@
 #include "config.h"
 #include <stdbool.h>
 #include <stdio.h>
-#include <string.h>
 #include "mutt/mutt.h"
 #include "mutt_curses.h"
 #ifdef HAVE_NCURSESW_NCURSES_H
@@ -43,8 +42,8 @@
 bool TsSupported; /**< Terminal Setting is supported */
 
 /* de facto standard escapes for tsl/fsl */
-static char *tsl = "\033]0;";
-static char *fsl = "\007";
+static const char *tsl = "\033]0;"; // Escape
+static const char *fsl = "\007";    // Ctrl-G (BEL)
 
 /**
  * mutt_ts_capability - Check terminal capabilities
@@ -54,14 +53,14 @@ static char *fsl = "\007";
  */
 bool mutt_ts_capability(void)
 {
-  char *known[] = {
+  const char *known[] = {
     "color-xterm", "cygwin", "eterm",  "kterm", "nxterm",
     "putty",       "rxvt",   "screen", "xterm", NULL,
   };
 
   /* If tsl is set, then terminfo says that status lines work. */
   char *tcaps = tigetstr("tsl");
-  if (tcaps && tcaps != (char *) -1 && *tcaps)
+  if (tcaps && (tcaps != (char *) -1) && *tcaps)
   {
     /* update the static definitions of tsl/fsl from terminfo */
     tsl = tcaps;
@@ -85,13 +84,13 @@ bool mutt_ts_capability(void)
   /* Check term types that are known to support the standard escape without
    * necessarily asserting it in terminfo. */
   const char *term = mutt_str_getenv("TERM");
-  for (char **termp = known; termp; termp++)
+  for (const char **termp = known; termp; termp++)
   {
-    if (term && *termp && (mutt_str_strncasecmp(term, *termp, strlen(*termp)) != 0))
+    if (term && *termp && !mutt_str_startswith(term, *termp, CASE_IGNORE))
       return true;
   }
 
-  /* not supported */
+  /* not reached */
   return false;
 }
 
@@ -121,5 +120,5 @@ void mutt_ts_icon(char *str)
     return;
 
   /* icon setting is not supported in terminfo, so hardcode the escape */
-  fprintf(stderr, "\033]1;%s\007", str);
+  fprintf(stderr, "\033]1;%s\007", str); // Escape
 }

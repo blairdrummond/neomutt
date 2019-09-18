@@ -4,6 +4,7 @@
  *
  * @authors
  * Copyright (C) 1996-2002,2004,2007 Michael R. Elkins <me@mutt.org>, and others
+ * Copyright (C) 2019 Pietro Cerutti <gahr@gahr.ch>
  *
  * @copyright
  * This program is free software: you can redistribute it and/or modify it under
@@ -34,104 +35,110 @@
 #include <string.h>
 #include <unistd.h>
 #include "mutt/mutt.h"
+#include "address/lib.h"
+#include "email/lib.h"
 #include "mutt.h"
-#include "envelope.h"
+#include "hook.h"
+#include "alias.h"
+#include "context.h"
+#include "format_flags.h"
 #include "globals.h"
-#include "header.h"
-#include "mailbox.h"
+#include "hdrline.h"
+#include "mutt_attach.h"
+#include "mutt_commands.h"
+#include "muttlib.h"
+#include "mx.h"
 #include "ncrypt/ncrypt.h"
-#include "options.h"
 #include "pattern.h"
-#include "protos.h"
 #ifdef USE_COMPRESSED
 #include "compress.h"
 #endif
 
-struct Context;
+/* These Config Variables are only used in hook.c */
+char *C_DefaultHook; ///< Config: Pattern to use for hooks that only have a simple regex
+bool C_ForceName; ///< Config: Save outgoing mail in a folder of their name
+bool C_SaveName; ///< Config: Save outgoing message to mailbox of recipient's name if it exists
 
 /**
  * struct Hook - A list of user hooks
  */
 struct Hook
 {
-  int type;                /**< hook type */
-  struct Regex regex;      /**< regular expression */
-  char *command;           /**< filename, command or pattern to execute */
-  struct Pattern *pattern; /**< used for fcc,save,send-hook */
-  TAILQ_ENTRY(Hook) entries;
+  HookFlags type;              ///< Hook type
+  struct Regex regex;          ///< Regular expression
+  char *command;               ///< Filename, command or pattern to execute
+  struct PatternList *pattern; ///< Used for fcc,save,send-hook
+  TAILQ_ENTRY(Hook) entries;   ///< Linked list
 };
-static TAILQ_HEAD(, Hook) Hooks = TAILQ_HEAD_INITIALIZER(Hooks);
+TAILQ_HEAD(HookList, Hook);
 
-static int current_hook_type = 0;
+static struct HookList Hooks = TAILQ_HEAD_INITIALIZER(Hooks);
+
+static struct Hash *IdxFmtHooks = NULL;
+static HookFlags current_hook_type = MUTT_HOOK_NO_FLAGS;
 
 /**
- * mutt_parse_hook - Parse the 'hook' family of commands
- * @param buf  Temporary Buffer
- * @param s    Buffer containing command
- * @param data Data from Command definition
- * @param err  Buffer for error messages
- * @retval  0 Success
- * @retval -1 Failure
+ * mutt_parse_hook - Parse the 'hook' family of commands - Implements ::command_t
  *
  * This is used by 'account-hook', 'append-hook' and many more.
  */
-int mutt_parse_hook(struct Buffer *buf, struct Buffer *s, unsigned long data,
-                    struct Buffer *err)
+enum CommandResult mutt_parse_hook(struct Buffer *buf, struct Buffer *s,
+                                   unsigned long data, struct Buffer *err)
 {
-  struct Hook *ptr = NULL;
-  struct Buffer command, pattern;
+  struct Hook *hook = NULL;
+  struct Buffer cmd, pattern;
   int rc;
-  bool not = false;
+  bool pat_not = false, warning = false;
   regex_t *rx = NULL;
-  struct Pattern *pat = NULL;
+  struct PatternList *pat = NULL;
   char path[PATH_MAX];
 
   mutt_buffer_init(&pattern);
-  mutt_buffer_init(&command);
+  mutt_buffer_init(&cmd);
 
-  if (~data & MUTT_GLOBALHOOK) /* NOT a global hook */
+  if (~data & MUTT_GLOBAL_HOOK) /* NOT a global hook */
   {
     if (*s->dptr == '!')
     {
       s->dptr++;
       SKIPWS(s->dptr);
-      not = true;
+      pat_not = true;
     }
 
-    mutt_extract_token(&pattern, s, 0);
+    mutt_extract_token(&pattern, s, MUTT_TOKEN_NO_FLAGS);
 
     if (!MoreArgs(s))
     {
       mutt_buffer_printf(err, _("%s: too few arguments"), buf->data);
-      goto error;
+      goto warn;
     }
   }
 
-  mutt_extract_token(&command, s,
-                     (data & (MUTT_FOLDERHOOK | MUTT_SENDHOOK | MUTT_SEND2HOOK |
-                              MUTT_ACCOUNTHOOK | MUTT_REPLYHOOK)) ?
+  mutt_extract_token(&cmd, s,
+                     (data & (MUTT_FOLDER_HOOK | MUTT_SEND_HOOK | MUTT_SEND2_HOOK |
+                              MUTT_ACCOUNT_HOOK | MUTT_REPLY_HOOK)) ?
                          MUTT_TOKEN_SPACE :
-                         0);
+                         MUTT_TOKEN_NO_FLAGS);
 
-  if (!command.data)
+  if (!cmd.data)
   {
     mutt_buffer_printf(err, _("%s: too few arguments"), buf->data);
-    goto error;
+    goto warn;
   }
 
   if (MoreArgs(s))
   {
     mutt_buffer_printf(err, _("%s: too many arguments"), buf->data);
-    goto error;
+    goto warn;
   }
 
-  if (data & (MUTT_FOLDERHOOK | MUTT_MBOXHOOK))
+  if (data & (MUTT_FOLDER_HOOK | MUTT_MBOX_HOOK))
   {
     /* Accidentally using the ^ mailbox shortcut in the .neomuttrc is a
      * common mistake */
     if ((*pattern.data == '^') && (!CurrentFolder))
     {
-      mutt_str_strfcpy(err->data, _("current mailbox shortcut '^' is unset"), err->dsize);
+      mutt_buffer_strcpy(err, _("current mailbox shortcut '^' is unset"));
       goto error;
     }
 
@@ -142,7 +149,7 @@ int mutt_parse_hook(struct Buffer *buf, struct Buffer *s, unsigned long data,
      * This is likely a mistake too */
     if (!*path && *pattern.data)
     {
-      mutt_str_strfcpy(err->data, _("mailbox shortcut expanded to empty regex"), err->dsize);
+      mutt_buffer_strcpy(err, _("mailbox shortcut expanded to empty regex"));
       goto error;
     }
 
@@ -151,68 +158,68 @@ int mutt_parse_hook(struct Buffer *buf, struct Buffer *s, unsigned long data,
     pattern.data = mutt_str_strdup(path);
   }
 #ifdef USE_COMPRESSED
-  else if (data & (MUTT_APPENDHOOK | MUTT_OPENHOOK | MUTT_CLOSEHOOK))
+  else if (data & (MUTT_APPEND_HOOK | MUTT_OPEN_HOOK | MUTT_CLOSE_HOOK))
   {
-    if (mutt_comp_valid_command(command.data) == 0)
+    if (mutt_comp_valid_command(cmd.data) == 0)
     {
-      mutt_str_strfcpy(err->data, _("badly formatted command string"), err->dsize);
-      return -1;
+      mutt_buffer_strcpy(err, _("badly formatted command string"));
+      return MUTT_CMD_ERROR;
     }
   }
 #endif
-  else if (DefaultHook && (~data & MUTT_GLOBALHOOK) &&
-           !(data & (MUTT_CHARSETHOOK | MUTT_ICONVHOOK | MUTT_ACCOUNTHOOK)) &&
-           (!WithCrypto || !(data & MUTT_CRYPTHOOK)))
+  else if (C_DefaultHook && (~data & MUTT_GLOBAL_HOOK) &&
+           !(data & (MUTT_CHARSET_HOOK | MUTT_ICONV_HOOK | MUTT_ACCOUNT_HOOK)) &&
+           (!WithCrypto || !(data & MUTT_CRYPT_HOOK)))
   {
-    char tmp[HUGE_STRING];
+    struct Buffer *tmp = mutt_buffer_pool_get();
 
     /* At this stage remain only message-hooks, reply-hooks, send-hooks,
      * send2-hooks, save-hooks, and fcc-hooks: All those allowing full
-     * patterns. If given a simple regex, we expand $default_hook.
-     */
-    mutt_str_strfcpy(tmp, pattern.data, sizeof(tmp));
-    mutt_check_simple(tmp, sizeof(tmp), DefaultHook);
+     * patterns. If given a simple regex, we expand $default_hook.  */
+    mutt_buffer_strcpy(tmp, pattern.data);
+    mutt_check_simple(tmp, C_DefaultHook);
     FREE(&pattern.data);
     mutt_buffer_init(&pattern);
-    pattern.data = mutt_str_strdup(tmp);
+    pattern.data = mutt_str_strdup(mutt_b2s(tmp));
+    mutt_buffer_pool_release(&tmp);
   }
 
-  if (data & (MUTT_MBOXHOOK | MUTT_SAVEHOOK | MUTT_FCCHOOK))
+  if (data & (MUTT_MBOX_HOOK | MUTT_SAVE_HOOK | MUTT_FCC_HOOK))
   {
-    mutt_str_strfcpy(path, command.data, sizeof(path));
+    mutt_str_strfcpy(path, cmd.data, sizeof(path));
     mutt_expand_path(path, sizeof(path));
-    FREE(&command.data);
-    mutt_buffer_init(&command);
-    command.data = mutt_str_strdup(path);
+    FREE(&cmd.data);
+    mutt_buffer_init(&cmd);
+    cmd.data = mutt_str_strdup(path);
   }
 
   /* check to make sure that a matching hook doesn't already exist */
-  TAILQ_FOREACH(ptr, &Hooks, entries)
+  TAILQ_FOREACH(hook, &Hooks, entries)
   {
-    if (data & MUTT_GLOBALHOOK)
+    if (data & MUTT_GLOBAL_HOOK)
     {
       /* Ignore duplicate global hooks */
-      if (mutt_str_strcmp(ptr->command, command.data) == 0)
+      if (mutt_str_strcmp(hook->command, cmd.data) == 0)
       {
-        FREE(&command.data);
-        return 0;
+        FREE(&cmd.data);
+        return MUTT_CMD_SUCCESS;
       }
     }
-    else if (ptr->type == data &&
-             ptr->regex.not == not&&(mutt_str_strcmp(pattern.data, ptr->regex.pattern) == 0))
+    else if ((hook->type == data) && (hook->regex.pat_not == pat_not) &&
+             (mutt_str_strcmp(pattern.data, hook->regex.pattern) == 0))
     {
-      if (data & (MUTT_FOLDERHOOK | MUTT_SENDHOOK | MUTT_SEND2HOOK | MUTT_MESSAGEHOOK |
-                  MUTT_ACCOUNTHOOK | MUTT_REPLYHOOK | MUTT_CRYPTHOOK |
-                  MUTT_TIMEOUTHOOK | MUTT_STARTUPHOOK | MUTT_SHUTDOWNHOOK))
+      if (data & (MUTT_FOLDER_HOOK | MUTT_SEND_HOOK | MUTT_SEND2_HOOK | MUTT_MESSAGE_HOOK |
+                  MUTT_ACCOUNT_HOOK | MUTT_REPLY_HOOK | MUTT_CRYPT_HOOK |
+                  MUTT_TIMEOUT_HOOK | MUTT_STARTUP_HOOK | MUTT_SHUTDOWN_HOOK))
       {
         /* these hooks allow multiple commands with the same
          * pattern, so if we've already seen this pattern/command pair, just
          * ignore it instead of creating a duplicate */
-        if (mutt_str_strcmp(ptr->command, command.data) == 0)
+        if (mutt_str_strcmp(hook->command, cmd.data) == 0)
         {
-          FREE(&command.data);
+          FREE(&cmd.data);
           FREE(&pattern.data);
-          return 0;
+          return MUTT_CMD_SUCCESS;
         }
       }
       else
@@ -222,38 +229,40 @@ int mutt_parse_hook(struct Buffer *buf, struct Buffer *s, unsigned long data,
          * order of execution of the hooks, which i think is desirable since
          * a common action to perform is to change the default (.) entry
          * based upon some other information. */
-        FREE(&ptr->command);
-        ptr->command = command.data;
+        FREE(&hook->command);
+        hook->command = cmd.data;
         FREE(&pattern.data);
-        return 0;
+        return MUTT_CMD_SUCCESS;
       }
     }
   }
 
-  if (data & (MUTT_CHARSETHOOK | MUTT_ICONVHOOK))
+  if (data & (MUTT_CHARSET_HOOK | MUTT_ICONV_HOOK))
   {
     /* These are managed separately by the charset code */
-    enum LookupType type = (data & MUTT_CHARSETHOOK) ? MUTT_LOOKUP_CHARSET : MUTT_LOOKUP_ICONV;
-    if (!mutt_ch_lookup_add(type, pattern.data, command.data, err))
+    enum LookupType type = (data & MUTT_CHARSET_HOOK) ? MUTT_LOOKUP_CHARSET : MUTT_LOOKUP_ICONV;
+    if (!mutt_ch_lookup_add(type, pattern.data, cmd.data, err))
       goto error;
     FREE(&pattern.data);
-    FREE(&command.data);
-    return 0;
+    FREE(&cmd.data);
+    return MUTT_CMD_SUCCESS;
   }
-  else if (data & (MUTT_SENDHOOK | MUTT_SEND2HOOK | MUTT_SAVEHOOK |
-                   MUTT_FCCHOOK | MUTT_MESSAGEHOOK | MUTT_REPLYHOOK))
+  else if (data & (MUTT_SEND_HOOK | MUTT_SEND2_HOOK | MUTT_SAVE_HOOK |
+                   MUTT_FCC_HOOK | MUTT_MESSAGE_HOOK | MUTT_REPLY_HOOK))
   {
-    pat = mutt_pattern_comp(
-        pattern.data,
-        (data & (MUTT_SENDHOOK | MUTT_SEND2HOOK | MUTT_FCCHOOK)) ? 0 : MUTT_FULL_MSG, err);
+    pat = mutt_pattern_comp(pattern.data,
+                            (data & (MUTT_SEND_HOOK | MUTT_SEND2_HOOK | MUTT_FCC_HOOK)) ?
+                                MUTT_PC_NO_FLAGS :
+                                MUTT_PC_FULL_MSG,
+                            err);
     if (!pat)
       goto error;
   }
-  else if (~data & MUTT_GLOBALHOOK) /* NOT a global hook */
+  else if (~data & MUTT_GLOBAL_HOOK) /* NOT a global hook */
   {
     /* Hooks not allowing full patterns: Check syntax of regex */
     rx = mutt_mem_malloc(sizeof(regex_t));
-    rc = REGCOMP(rx, NONULL(pattern.data), ((data & MUTT_CRYPTHOOK) ? REG_ICASE : 0));
+    rc = REG_COMP(rx, NONULL(pattern.data), ((data & MUTT_CRYPT_HOOK) ? REG_ICASE : 0));
     if (rc != 0)
     {
       regerror(rc, rx, err->data, err->dsize);
@@ -262,21 +271,23 @@ int mutt_parse_hook(struct Buffer *buf, struct Buffer *s, unsigned long data,
     }
   }
 
-  ptr = mutt_mem_calloc(1, sizeof(struct Hook));
-  ptr->type = data;
-  ptr->command = command.data;
-  ptr->pattern = pat;
-  ptr->regex.pattern = pattern.data;
-  ptr->regex.regex = rx;
-  ptr->regex.not = not;
-  TAILQ_INSERT_TAIL(&Hooks, ptr, entries);
-  return 0;
+  hook = mutt_mem_calloc(1, sizeof(struct Hook));
+  hook->type = data;
+  hook->command = cmd.data;
+  hook->pattern = pat;
+  hook->regex.pattern = pattern.data;
+  hook->regex.regex = rx;
+  hook->regex.pat_not = pat_not;
+  TAILQ_INSERT_TAIL(&Hooks, hook, entries);
+  return MUTT_CMD_SUCCESS;
 
+warn:
+  warning = true;
 error:
-  if (~data & MUTT_GLOBALHOOK) /* NOT a global hook */
+  if (~data & MUTT_GLOBAL_HOOK) /* NOT a global hook */
     FREE(&pattern.data);
-  FREE(&command.data);
-  return -1;
+  FREE(&cmd.data);
+  return (warning ? MUTT_CMD_WARNING : MUTT_CMD_ERROR);
 }
 
 /**
@@ -290,6 +301,7 @@ static void delete_hook(struct Hook *h)
   if (h->regex.regex)
   {
     regfree(h->regex.regex);
+    FREE(&h->regex.regex);
   }
   mutt_pattern_free(&h->pattern);
   FREE(&h);
@@ -297,18 +309,18 @@ static void delete_hook(struct Hook *h)
 
 /**
  * mutt_delete_hooks - Delete matching hooks
- * @param type Hook type to delete, e.g. #MUTT_SENDHOOK
+ * @param type Hook type to delete, see #HookFlags
  *
  * If 0 is passed, all the hooks will be deleted.
  */
-void mutt_delete_hooks(int type)
+void mutt_delete_hooks(HookFlags type)
 {
   struct Hook *h = NULL;
   struct Hook *tmp = NULL;
 
   TAILQ_FOREACH_SAFE(h, &Hooks, entries, tmp)
   {
-    if (type == 0 || type == h->type)
+    if ((type == MUTT_HOOK_NO_FLAGS) || (type == h->type))
     {
       TAILQ_REMOVE(&Hooks, h, entries);
       delete_hook(h);
@@ -317,107 +329,233 @@ void mutt_delete_hooks(int type)
 }
 
 /**
- * mutt_parse_unhook - Parse the 'unhook' command
- * @param buf  Temporary Buffer
- * @param s    Buffer containing command
- * @param data Data from Command definition
- * @param err  Buffer for error messages
- * @retval  0 Success
- * @retval -1 Failure
+ * delete_idxfmt_hooklist - Delete a index-format-hook from the Hash Table
+ * @param type Type of Hash Element
+ * @param obj  Pointer to Hashed object
+ * @param data Private data
  */
-int mutt_parse_unhook(struct Buffer *buf, struct Buffer *s, unsigned long data,
-                      struct Buffer *err)
+static void delete_idxfmt_hooklist(int type, void *obj, intptr_t data)
+{
+  struct HookList *hl = obj;
+  struct Hook *h = NULL;
+  struct Hook *tmp = NULL;
+
+  TAILQ_FOREACH_SAFE(h, hl, entries, tmp)
+  {
+    TAILQ_REMOVE(hl, h, entries);
+    delete_hook(h);
+  }
+
+  FREE(&hl);
+}
+
+/**
+ * delete_idxfmt_hooks - Delete all the index-format-hooks
+ */
+static void delete_idxfmt_hooks(void)
+{
+  mutt_hash_free(&IdxFmtHooks);
+}
+
+/**
+ * mutt_parse_idxfmt_hook - Parse the 'index-format-hook' command - Implements ::command_t
+ */
+enum CommandResult mutt_parse_idxfmt_hook(struct Buffer *buf, struct Buffer *s,
+                                          unsigned long data, struct Buffer *err)
+{
+  enum CommandResult rc = MUTT_CMD_ERROR;
+  bool pat_not = false;
+
+  struct Buffer *name = mutt_buffer_pool_get();
+  struct Buffer *pattern = mutt_buffer_pool_get();
+  struct Buffer *fmtstring = mutt_buffer_pool_get();
+
+  if (!IdxFmtHooks)
+  {
+    IdxFmtHooks = mutt_hash_new(30, MUTT_HASH_STRDUP_KEYS);
+    mutt_hash_set_destructor(IdxFmtHooks, delete_idxfmt_hooklist, 0);
+  }
+
+  if (!MoreArgs(s))
+  {
+    mutt_buffer_printf(err, _("%s: too few arguments"), buf->data);
+    goto out;
+  }
+  mutt_extract_token(name, s, MUTT_TOKEN_NO_FLAGS);
+  struct HookList *hl = mutt_hash_find(IdxFmtHooks, mutt_b2s(name));
+
+  if (*s->dptr == '!')
+  {
+    s->dptr++;
+    SKIPWS(s->dptr);
+    pat_not = true;
+  }
+  mutt_extract_token(pattern, s, MUTT_TOKEN_NO_FLAGS);
+
+  if (!MoreArgs(s))
+  {
+    mutt_buffer_printf(err, _("%s: too few arguments"), buf->data);
+    goto out;
+  }
+  mutt_extract_token(fmtstring, s, MUTT_TOKEN_NO_FLAGS);
+
+  if (MoreArgs(s))
+  {
+    mutt_buffer_printf(err, _("%s: too many arguments"), buf->data);
+    goto out;
+  }
+
+  if (C_DefaultHook)
+    mutt_check_simple(pattern, C_DefaultHook);
+
+  /* check to make sure that a matching hook doesn't already exist */
+  struct Hook *hook = NULL;
+  if (hl)
+  {
+    TAILQ_FOREACH(hook, hl, entries)
+    {
+      if ((hook->regex.pat_not == pat_not) &&
+          (mutt_str_strcmp(mutt_b2s(pattern), hook->regex.pattern) == 0))
+      {
+        mutt_str_replace(&hook->command, mutt_b2s(fmtstring));
+        rc = MUTT_CMD_SUCCESS;
+        goto out;
+      }
+    }
+  }
+
+  /* MUTT_PC_PATTERN_DYNAMIC sets so that date ranges are regenerated during
+   * matching.  This of course is slower, but index-format-hook is commonly
+   * used for date ranges, and they need to be evaluated relative to "now", not
+   * the hook compilation time.  */
+  struct PatternList *pat = mutt_pattern_comp(
+      mutt_b2s(pattern), MUTT_PC_FULL_MSG | MUTT_PC_PATTERN_DYNAMIC, err);
+  if (!pat)
+    goto out;
+
+  hook = mutt_mem_calloc(1, sizeof(struct Hook));
+  hook->type = data;
+  hook->command = mutt_str_strdup(mutt_b2s(fmtstring));
+  hook->pattern = pat;
+  hook->regex.pattern = mutt_str_strdup(mutt_b2s(pattern));
+  hook->regex.regex = NULL;
+  hook->regex.pat_not = pat_not;
+
+  if (!hl)
+  {
+    hl = mutt_mem_calloc(1, sizeof(*hl));
+    TAILQ_INIT(hl);
+    mutt_hash_insert(IdxFmtHooks, mutt_b2s(name), hl);
+  }
+
+  TAILQ_INSERT_TAIL(hl, hook, entries);
+  rc = MUTT_CMD_SUCCESS;
+
+out:
+  mutt_buffer_pool_release(&name);
+  mutt_buffer_pool_release(&pattern);
+  mutt_buffer_pool_release(&fmtstring);
+
+  return rc;
+}
+
+/**
+ * mutt_parse_unhook - Parse the 'unhook' command - Implements ::command_t
+ */
+enum CommandResult mutt_parse_unhook(struct Buffer *buf, struct Buffer *s,
+                                     unsigned long data, struct Buffer *err)
 {
   while (MoreArgs(s))
   {
-    mutt_extract_token(buf, s, 0);
+    mutt_extract_token(buf, s, MUTT_TOKEN_NO_FLAGS);
     if (mutt_str_strcmp("*", buf->data) == 0)
     {
-      if (current_hook_type)
+      if (current_hook_type != MUTT_TOKEN_NO_FLAGS)
       {
-        mutt_buffer_printf(err, "%s", _("unhook: Can't do unhook * from within a hook."));
-        return -1;
+        mutt_buffer_printf(err, "%s", _("unhook: Can't do unhook * from within a hook"));
+        return MUTT_CMD_WARNING;
       }
-      mutt_delete_hooks(0);
+      mutt_delete_hooks(MUTT_HOOK_NO_FLAGS);
+      delete_idxfmt_hooks();
       mutt_ch_lookup_remove();
     }
     else
     {
-      int type = mutt_get_hook_type(buf->data);
+      HookFlags type = mutt_get_hook_type(buf->data);
 
-      if (!type)
+      if (type == MUTT_HOOK_NO_FLAGS)
       {
         mutt_buffer_printf(err, _("unhook: unknown hook type: %s"), buf->data);
-        return -1;
+        return MUTT_CMD_ERROR;
       }
-      if (type & (MUTT_CHARSETHOOK | MUTT_ICONVHOOK))
+      if (type & (MUTT_CHARSET_HOOK | MUTT_ICONV_HOOK))
       {
         mutt_ch_lookup_remove();
-        return 0;
+        return MUTT_CMD_SUCCESS;
       }
       if (current_hook_type == type)
       {
-        mutt_buffer_printf(err, _("unhook: Can't delete a %s from within a %s."),
+        mutt_buffer_printf(err, _("unhook: Can't delete a %s from within a %s"),
                            buf->data, buf->data);
-        return -1;
+        return MUTT_CMD_WARNING;
       }
-      mutt_delete_hooks(type);
+      if (type == MUTT_IDXFMTHOOK)
+        delete_idxfmt_hooks();
+      else
+        mutt_delete_hooks(type);
     }
   }
-  return 0;
+  return MUTT_CMD_SUCCESS;
 }
 
 /**
  * mutt_folder_hook - Perform a folder hook
- * @param path Path to match
+ * @param path Path to potentially match
+ * @param desc Description to potentially match
  */
-void mutt_folder_hook(const char *path)
+void mutt_folder_hook(const char *path, const char *desc)
 {
+  if (!path && !desc)
+    return;
+
   struct Hook *tmp = NULL;
-  struct Buffer err, token;
+  struct Buffer *err = mutt_buffer_pool_get();
+  struct Buffer *token = mutt_buffer_pool_get();
 
-  current_hook_type = MUTT_FOLDERHOOK;
+  current_hook_type = MUTT_FOLDER_HOOK;
 
-  mutt_buffer_init(&err);
-  err.dsize = STRING;
-  err.data = mutt_mem_malloc(err.dsize);
-  mutt_buffer_init(&token);
   TAILQ_FOREACH(tmp, &Hooks, entries)
   {
     if (!tmp->command)
       continue;
 
-    if (tmp->type & MUTT_FOLDERHOOK)
-    {
-      if ((regexec(tmp->regex.regex, path, 0, NULL, 0) == 0) ^ tmp->regex.not)
-      {
-        if (mutt_parse_rc_line(tmp->command, &token, &err) == -1)
-        {
-          mutt_error("%s", err.data);
-          FREE(&token.data);
-          current_hook_type = 0;
-          FREE(&err.data);
+    if (!(tmp->type & MUTT_FOLDER_HOOK))
+      continue;
 
-          return;
-        }
+    if (mutt_regex_match(&tmp->regex, path) || mutt_regex_match(&tmp->regex, desc))
+    {
+      if (mutt_parse_rc_line(tmp->command, token, err) == MUTT_CMD_ERROR)
+      {
+        mutt_error("%s", mutt_b2s(err));
+        break;
       }
     }
   }
-  FREE(&token.data);
-  FREE(&err.data);
+  mutt_buffer_pool_release(&token);
+  mutt_buffer_pool_release(&err);
 
-  current_hook_type = 0;
+  current_hook_type = MUTT_HOOK_NO_FLAGS;
 }
 
 /**
  * mutt_find_hook - Find a matching hook
- * @param type Type, e.g. #MUTT_FOLDERHOOK
+ * @param type Hook type, see #HookFlags
  * @param pat  Pattern to match
  * @retval ptr Command string
  *
  * @note The returned string must not be freed.
  */
-char *mutt_find_hook(int type, const char *pat)
+char *mutt_find_hook(HookFlags type, const char *pat)
 {
   struct Hook *tmp = NULL;
 
@@ -425,7 +563,7 @@ char *mutt_find_hook(int type, const char *pat)
   {
     if (tmp->type & type)
     {
-      if (regexec(tmp->regex.regex, pat, 0, NULL, 0) == 0)
+      if (mutt_regex_match(&tmp->regex, pat))
         return tmp->command;
     }
   }
@@ -434,22 +572,19 @@ char *mutt_find_hook(int type, const char *pat)
 
 /**
  * mutt_message_hook - Perform a message hook
- * @param ctx Mailbox Context
- * @param hdr Email Header
- * @param type Hook type, e.g. #MUTT_MESSAGEHOOK
+ * @param m   Mailbox Context
+ * @param e   Email
+ * @param type Hook type, see #HookFlags
  */
-void mutt_message_hook(struct Context *ctx, struct Header *hdr, int type)
+void mutt_message_hook(struct Mailbox *m, struct Email *e, HookFlags type)
 {
-  struct Buffer err, token;
   struct Hook *hook = NULL;
   struct PatternCache cache = { 0 };
+  struct Buffer *err = mutt_buffer_pool_get();
+  struct Buffer *token = mutt_buffer_pool_get();
 
   current_hook_type = type;
 
-  mutt_buffer_init(&err);
-  err.dsize = STRING;
-  err.data = mutt_mem_malloc(err.dsize);
-  mutt_buffer_init(&token);
   TAILQ_FOREACH(hook, &Hooks, entries)
   {
     if (!hook->command)
@@ -457,15 +592,15 @@ void mutt_message_hook(struct Context *ctx, struct Header *hdr, int type)
 
     if (hook->type & type)
     {
-      if ((mutt_pattern_exec(hook->pattern, 0, ctx, hdr, &cache) > 0) ^
-          hook->regex.not)
+      if ((mutt_pattern_exec(SLIST_FIRST(hook->pattern), 0, m, e, &cache) > 0) ^
+          hook->regex.pat_not)
       {
-        if (mutt_parse_rc_line(hook->command, &token, &err) == -1)
+        if (mutt_parse_rc_line(hook->command, token, err) == MUTT_CMD_ERROR)
         {
-          FREE(&token.data);
-          mutt_error("%s", err.data);
-          current_hook_type = 0;
-          FREE(&err.data);
+          mutt_buffer_pool_release(&token);
+          mutt_error("%s", mutt_b2s(err));
+          current_hook_type = MUTT_HOOK_NO_FLAGS;
+          mutt_buffer_pool_release(&err);
 
           return;
         }
@@ -475,24 +610,24 @@ void mutt_message_hook(struct Context *ctx, struct Header *hdr, int type)
       }
     }
   }
-  FREE(&token.data);
-  FREE(&err.data);
+  mutt_buffer_pool_release(&token);
+  mutt_buffer_pool_release(&err);
 
-  current_hook_type = 0;
+  current_hook_type = MUTT_HOOK_NO_FLAGS;
 }
 
 /**
  * addr_hook - Perform an address hook (get a path)
  * @param path    Buffer for path
  * @param pathlen Length of buffer
- * @param type    Type e.g. #MUTT_FCCHOOK
+ * @param type    Hook type, see #HookFlags
  * @param ctx     Mailbox Context
- * @param hdr     Email Header
+ * @param e       Email
  * @retval  0 Success
  * @retval -1 Failure
  */
-static int addr_hook(char *path, size_t pathlen, int type, struct Context *ctx,
-                     struct Header *hdr)
+static int addr_hook(char *path, size_t pathlen, HookFlags type,
+                     struct Context *ctx, struct Email *e)
 {
   struct Hook *hook = NULL;
   struct PatternCache cache = { 0 };
@@ -505,10 +640,11 @@ static int addr_hook(char *path, size_t pathlen, int type, struct Context *ctx,
 
     if (hook->type & type)
     {
-      if ((mutt_pattern_exec(hook->pattern, 0, ctx, hdr, &cache) > 0) ^
-          hook->regex.not)
+      struct Mailbox *m = ctx ? ctx->mailbox : NULL;
+      if ((mutt_pattern_exec(SLIST_FIRST(hook->pattern), 0, m, e, &cache) > 0) ^
+          hook->regex.pat_not)
       {
-        mutt_make_string(path, pathlen, hook->command, ctx, hdr);
+        mutt_make_string_flags(path, pathlen, hook->command, ctx, m, e, MUTT_FORMAT_PLAIN);
         return 0;
       }
     }
@@ -521,26 +657,30 @@ static int addr_hook(char *path, size_t pathlen, int type, struct Context *ctx,
  * mutt_default_save - Find the default save path for an email
  * @param path    Buffer for the path
  * @param pathlen Length of buffer
- * @param hdr     Email Header
+ * @param e       Email
  */
-void mutt_default_save(char *path, size_t pathlen, struct Header *hdr)
+void mutt_default_save(char *path, size_t pathlen, struct Email *e)
 {
   *path = '\0';
-  if (addr_hook(path, pathlen, MUTT_SAVEHOOK, Context, hdr) == 0)
+  if (addr_hook(path, pathlen, MUTT_SAVE_HOOK, Context, e) == 0)
     return;
 
-  struct Address *addr = NULL;
-  struct Envelope *env = hdr->env;
-  bool from_me = mutt_addr_is_user(env->from);
+  struct Envelope *env = e->env;
+  const struct Address *from = TAILQ_FIRST(&env->from);
+  const struct Address *reply_to = TAILQ_FIRST(&env->reply_to);
+  const struct Address *to = TAILQ_FIRST(&env->to);
+  const struct Address *cc = TAILQ_FIRST(&env->cc);
+  const struct Address *addr = NULL;
+  bool from_me = mutt_addr_is_user(from);
 
-  if (!from_me && env->reply_to && env->reply_to->mailbox)
-    addr = env->reply_to;
-  else if (!from_me && env->from && env->from->mailbox)
-    addr = env->from;
-  else if (env->to && env->to->mailbox)
-    addr = env->to;
-  else if (env->cc && env->cc->mailbox)
-    addr = env->cc;
+  if (!from_me && reply_to && reply_to->mailbox)
+    addr = reply_to;
+  else if (!from_me && from && from->mailbox)
+    addr = from;
+  else if (to && to->mailbox)
+    addr = to;
+  else if (cc && cc->mailbox)
+    addr = cc;
   else
     addr = NULL;
   if (addr)
@@ -555,24 +695,26 @@ void mutt_default_save(char *path, size_t pathlen, struct Header *hdr)
  * mutt_select_fcc - Select the FCC path for an email
  * @param path    Buffer for the path
  * @param pathlen Length of the buffer
- * @param hdr     Email Header
+ * @param e       Email
  */
-void mutt_select_fcc(char *path, size_t pathlen, struct Header *hdr)
+void mutt_select_fcc(char *path, size_t pathlen, struct Email *e)
 {
-  if (addr_hook(path, pathlen, MUTT_FCCHOOK, NULL, hdr) != 0)
+  if (addr_hook(path, pathlen, MUTT_FCC_HOOK, NULL, e) != 0)
   {
-    struct Envelope *env = hdr->env;
-    if ((SaveName || ForceName) && (env->to || env->cc || env->bcc))
+    const struct Address *to = TAILQ_FIRST(&e->env->to);
+    const struct Address *cc = TAILQ_FIRST(&e->env->cc);
+    const struct Address *bcc = TAILQ_FIRST(&e->env->bcc);
+    if ((C_SaveName || C_ForceName) && (to || cc || bcc))
     {
-      struct Address *addr = env->to ? env->to : (env->cc ? env->cc : env->bcc);
+      const struct Address *addr = to ? to : (cc ? cc : bcc);
       char buf[PATH_MAX];
       mutt_safe_path(buf, sizeof(buf), addr);
-      mutt_file_concat_path(path, NONULL(Folder), buf, pathlen);
-      if (!ForceName && mx_access(path, W_OK) != 0)
-        mutt_str_strfcpy(path, NONULL(Record), pathlen);
+      mutt_path_concat(path, NONULL(C_Folder), buf, pathlen);
+      if (!C_ForceName && (mx_access(path, W_OK) != 0))
+        mutt_str_strfcpy(path, C_Record, pathlen);
     }
     else
-      mutt_str_strfcpy(path, NONULL(Record), pathlen);
+      mutt_str_strfcpy(path, C_Record, pathlen);
   }
   mutt_pretty_mailbox(path, pathlen);
 }
@@ -581,16 +723,15 @@ void mutt_select_fcc(char *path, size_t pathlen, struct Header *hdr)
  * list_hook - Find hook strings matching
  * @param[out] matches List of hook strings
  * @param[in]  match   String to match
- * @param[in]  hook    Hook type, e.g. #MUTT_CRYPTHOOK
+ * @param[in]  hook    Hook type, see #HookFlags
  */
-static void list_hook(struct ListHead *matches, const char *match, int hook)
+static void list_hook(struct ListHead *matches, const char *match, HookFlags hook)
 {
   struct Hook *tmp = NULL;
 
   TAILQ_FOREACH(tmp, &Hooks, entries)
   {
-    if ((tmp->type & hook) && ((match && regexec(tmp->regex.regex, match, 0, NULL, 0) == 0) ^
-                               tmp->regex.not))
+    if ((tmp->type & hook) && mutt_regex_match(&tmp->regex, match))
     {
       mutt_list_insert_tail(matches, mutt_str_strdup(tmp->command));
     }
@@ -606,7 +747,7 @@ static void list_hook(struct ListHead *matches, const char *match, int hook)
  */
 void mutt_crypt_hook(struct ListHead *list, struct Address *addr)
 {
-  list_hook(list, addr->mailbox, MUTT_CRYPTHOOK);
+  list_hook(list, addr->mailbox, MUTT_CRYPT_HOOK);
 }
 
 #ifdef USE_SOCKET
@@ -622,31 +763,26 @@ void mutt_account_hook(const char *url)
   static bool inhook = false;
 
   struct Hook *hook = NULL;
-  struct Buffer token;
-  struct Buffer err;
+  struct Buffer *err = mutt_buffer_pool_get();
+  struct Buffer *token = mutt_buffer_pool_get();
 
   if (inhook)
     return;
 
-  mutt_buffer_init(&err);
-  err.dsize = STRING;
-  err.data = mutt_mem_malloc(err.dsize);
-  mutt_buffer_init(&token);
-
   TAILQ_FOREACH(hook, &Hooks, entries)
   {
-    if (!(hook->command && (hook->type & MUTT_ACCOUNTHOOK)))
+    if (!(hook->command && (hook->type & MUTT_ACCOUNT_HOOK)))
       continue;
 
-    if ((regexec(hook->regex.regex, url, 0, NULL, 0) == 0) ^ hook->regex.not)
+    if (mutt_regex_match(&hook->regex, url))
     {
       inhook = true;
 
-      if (mutt_parse_rc_line(hook->command, &token, &err) == -1)
+      if (mutt_parse_rc_line(hook->command, token, err) == MUTT_CMD_ERROR)
       {
-        FREE(&token.data);
-        mutt_error("%s", err.data);
-        FREE(&err.data);
+        mutt_buffer_pool_release(&token);
+        mutt_error("%s", mutt_b2s(err));
+        mutt_buffer_pool_release(&err);
 
         inhook = false;
         return;
@@ -656,8 +792,8 @@ void mutt_account_hook(const char *url)
     }
   }
 
-  FREE(&token.data);
-  FREE(&err.data);
+  mutt_buffer_pool_release(&token);
+  mutt_buffer_pool_release(&err);
 }
 #endif
 
@@ -672,18 +808,19 @@ void mutt_timeout_hook(void)
   struct Hook *hook = NULL;
   struct Buffer token;
   struct Buffer err;
-  char buf[STRING];
+  char buf[256];
 
+  mutt_buffer_init(&err);
   err.data = buf;
   err.dsize = sizeof(buf);
   mutt_buffer_init(&token);
 
   TAILQ_FOREACH(hook, &Hooks, entries)
   {
-    if (!(hook->command && (hook->type & MUTT_TIMEOUTHOOK)))
+    if (!(hook->command && (hook->type & MUTT_TIMEOUT_HOOK)))
       continue;
 
-    if (mutt_parse_rc_line(hook->command, &token, &err) == -1)
+    if (mutt_parse_rc_line(hook->command, &token, &err) == MUTT_CMD_ERROR)
     {
       mutt_error("%s", err.data);
       mutt_buffer_reset(&err);
@@ -693,21 +830,24 @@ void mutt_timeout_hook(void)
     }
   }
   FREE(&token.data);
+
+  /* Delete temporary attachment files */
+  mutt_unlink_temp_attachments();
 }
 
 /**
  * mutt_startup_shutdown_hook - Execute any startup/shutdown hooks
- * @param type Hook type: MUTT_STARTUPHOOK or MUTT_SHUTDOWNHOOK
+ * @param type Hook type: #MUTT_STARTUP_HOOK or #MUTT_SHUTDOWN_HOOK
  *
  * The user can configure hooks to be run on startup/shutdown.
  * This function finds all the matching hooks and executes them.
  */
-void mutt_startup_shutdown_hook(int type)
+void mutt_startup_shutdown_hook(HookFlags type)
 {
   struct Hook *hook = NULL;
-  struct Buffer token;
-  struct Buffer err;
-  char buf[STRING];
+  struct Buffer token = mutt_buffer_make(0);
+  struct Buffer err = mutt_buffer_make(0);
+  char buf[256];
 
   err.data = buf;
   err.dsize = sizeof(buf);
@@ -718,11 +858,49 @@ void mutt_startup_shutdown_hook(int type)
     if (!(hook->command && (hook->type & type)))
       continue;
 
-    if (mutt_parse_rc_line(hook->command, &token, &err) == -1)
+    if (mutt_parse_rc_line(hook->command, &token, &err) == MUTT_CMD_ERROR)
     {
       mutt_error("%s", err.data);
       mutt_buffer_reset(&err);
     }
   }
   FREE(&token.data);
+}
+
+/**
+ * mutt_idxfmt_hook - Get index-format-hook format string
+ * @param name Hook name
+ * @param m    Mailbox
+ * @param e    Email
+ * @retval ptr  printf(3)-like format string
+ * @retval NULL No matching hook
+ */
+const char *mutt_idxfmt_hook(const char *name, struct Mailbox *m, struct Email *e)
+{
+  if (!IdxFmtHooks)
+    return NULL;
+
+  struct HookList *hl = mutt_hash_find(IdxFmtHooks, name);
+  if (!hl)
+    return NULL;
+
+  current_hook_type = MUTT_IDXFMTHOOK;
+
+  struct PatternCache cache = { 0 };
+  const char *fmtstring = NULL;
+  struct Hook *hook = NULL;
+
+  TAILQ_FOREACH(hook, hl, entries)
+  {
+    struct Pattern *pat = SLIST_FIRST(hook->pattern);
+    if ((mutt_pattern_exec(pat, 0, m, e, &cache) > 0) ^ hook->regex.pat_not)
+    {
+      fmtstring = hook->command;
+      break;
+    }
+  }
+
+  current_hook_type = MUTT_HOOK_NO_FLAGS;
+
+  return fmtstring;
 }

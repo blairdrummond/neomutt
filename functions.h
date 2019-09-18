@@ -20,11 +20,13 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _MUTT_FUNCTIONS_H
-#define _MUTT_FUNCTIONS_H
+#ifndef MUTT_FUNCTIONS_H
+#define MUTT_FUNCTIONS_H
+
+#include "config.h"
 
 /*
- * This file contains the structures needed to parse ``bind'' commands, as
+ * This file contains the structures needed to parse "bind" commands, as
  * well as the default bindings for each menu.
  *
  * Notes:
@@ -46,6 +48,9 @@
 #endif
 
 // clang-format off
+/**
+ * OpGeneric - Key bindings for the generic menu
+ */
 const struct Binding OpGeneric[] = { /* map: generic */
   /*
   ** <para>
@@ -56,6 +61,7 @@ const struct Binding OpGeneric[] = { /* map: generic */
   ** </para>
   */
   { "bottom-page",     OP_BOTTOM_PAGE,          "L" },
+  { "check-stats",     OP_CHECK_STATS,          NULL },
   { "current-bottom",  OP_CURRENT_BOTTOM,       NULL },
   { "current-middle",  OP_CURRENT_MIDDLE,       NULL },
   { "current-top",     OP_CURRENT_TOP,          NULL },
@@ -75,11 +81,11 @@ const struct Binding OpGeneric[] = { /* map: generic */
   { "previous-entry",  OP_PREV_ENTRY,           "k" },
   { "previous-line",   OP_PREV_LINE,            "<" },
   { "previous-page",   OP_PREV_PAGE,            "Z" },
-  { "refresh",         OP_REDRAW,               "\014" },
+  { "refresh",         OP_REDRAW,               "\014" },                       // <Ctrl-L>
   { "search",          OP_SEARCH,               "/" },
   { "search-next",     OP_SEARCH_NEXT,          "n" },
   { "search-opposite", OP_SEARCH_OPPOSITE,      NULL },
-  { "search-reverse",  OP_SEARCH_REVERSE,       "\033/" },
+  { "search-reverse",  OP_SEARCH_REVERSE,       "\033/" },                      // <Alt-/>
   { "select-entry",    OP_GENERIC_SELECT_ENTRY, "\n" },
   { "select-entry",    OP_GENERIC_SELECT_ENTRY, "\r" },
   { "shell-escape",    OP_SHELL_ESCAPE,         "!" },
@@ -91,50 +97,55 @@ const struct Binding OpGeneric[] = { /* map: generic */
   { NULL,              0,                       NULL },
 };
 
+/**
+ * OpMain - Key bindings for the index menu
+ */
 const struct Binding OpMain[] = { /* map: index */
+#ifdef USE_AUTOCRYPT
+  { "autocrypt-acct-menu",        OP_AUTOCRYPT_ACCT_MENU,           "A" },
+#endif
   { "bounce-message",            OP_BOUNCE_MESSAGE,                 "b" },
   { "break-thread",              OP_MAIN_BREAK_THREAD,              "#" },
-  { "buffy-list",                OP_BUFFY_LIST,                     "." },
 #ifdef USE_NNTP
   { "catchup",                   OP_CATCHUP,                        NULL },
 #endif
   { "change-folder",             OP_MAIN_CHANGE_FOLDER,             "c" },
-  { "change-folder-readonly",    OP_MAIN_CHANGE_FOLDER_READONLY,    "\033c" },
+  { "change-folder-readonly",    OP_MAIN_CHANGE_FOLDER_READONLY,    "\033c" },  // <Alt-c>
 #ifdef USE_NNTP
-  { "change-newsgroup",          OP_MAIN_CHANGE_GROUP,              NULL },
-  { "change-newsgroup-readonly", OP_MAIN_CHANGE_GROUP_READONLY,     NULL },
+  { "change-newsgroup",          OP_MAIN_CHANGE_GROUP,              "i" },
+  { "change-newsgroup-readonly", OP_MAIN_CHANGE_GROUP_READONLY,     "\033i" },  // <Alt-i>
 #endif
 #ifdef USE_NOTMUCH
   { "change-vfolder",            OP_MAIN_CHANGE_VFOLDER,            NULL },
 #endif
-  { "check-traditional-pgp",     OP_CHECK_TRADITIONAL,              "\033P" },
+  { "check-traditional-pgp",     OP_CHECK_TRADITIONAL,              "\033P" },  // <Alt-P>
   { "clear-flag",                OP_MAIN_CLEAR_FLAG,                "W" },
-  { "collapse-all",              OP_MAIN_COLLAPSE_ALL,              "\033V" },
-  { "collapse-thread",           OP_MAIN_COLLAPSE_THREAD,           "\033v" },
+  { "collapse-all",              OP_MAIN_COLLAPSE_ALL,              "\033V" },  // <Alt-V>
+  { "collapse-thread",           OP_MAIN_COLLAPSE_THREAD,           "\033v" },  // <Alt-v>
   { "compose-to-sender",         OP_COMPOSE_TO_SENDER,              NULL },
   { "copy-message",              OP_COPY_MESSAGE,                   "C" },
   { "create-alias",              OP_CREATE_ALIAS,                   "a" },
-  { "decode-copy",               OP_DECODE_COPY,                    "\033C" },
-  { "decode-save",               OP_DECODE_SAVE,                    "\033s" },
+  { "decode-copy",               OP_DECODE_COPY,                    "\033C" },  // <Alt-C>
+  { "decode-save",               OP_DECODE_SAVE,                    "\033s" },  // <Alt-s>
   { "decrypt-copy",              OP_DECRYPT_COPY,                   NULL },
   { "decrypt-save",              OP_DECRYPT_SAVE,                   NULL },
   { "delete-message",            OP_DELETE,                         "d" },
   { "delete-pattern",            OP_MAIN_DELETE_PATTERN,            "D" },
-  { "delete-subthread",          OP_DELETE_SUBTHREAD,               "\033d" },
-  { "delete-thread",             OP_DELETE_THREAD,                  "\004" },
+  { "delete-subthread",          OP_DELETE_SUBTHREAD,               "\033d" },  // <Alt-d>
+  { "delete-thread",             OP_DELETE_THREAD,                  "\004" },   // <Ctrl-D>
   { "display-address",           OP_DISPLAY_ADDRESS,                "@" },
-  { "display-message",           OP_DISPLAY_MESSAGE,                "\n" },
+  { "display-message",           OP_DISPLAY_MESSAGE,                "\n" },     // <Enter>
   { "display-message",           OP_DISPLAY_MESSAGE,                "\r" },
   { "display-toggle-weed",       OP_DISPLAY_HEADERS,                "h" },
   { "edit",                      OP_EDIT_RAW_MESSAGE,               NULL },
   { "edit-label",                OP_EDIT_LABEL,                     "Y" },
   { "edit-or-view-raw-message",  OP_EDIT_OR_VIEW_RAW_MESSAGE,       "e" },
   { "edit-raw-message",          OP_EDIT_RAW_MESSAGE,               NULL },
-  { "edit-type",                 OP_EDIT_TYPE,                      "\005" },
+  { "edit-type",                 OP_EDIT_TYPE,                      "\005" },   // <Ctrl-E>
 #ifdef USE_NOTMUCH
   { "entire-thread",             OP_MAIN_ENTIRE_THREAD,             NULL },
 #endif
-  { "extract-keys",              OP_EXTRACT_KEYS,                   "\013" },
+  { "extract-keys",              OP_EXTRACT_KEYS,                   "\013" },   // <Ctrl-K>
 #ifdef USE_POP
   { "fetch-mail",                OP_MAIN_FETCH_MAIL,                "G" },
 #endif
@@ -142,7 +153,7 @@ const struct Binding OpMain[] = { /* map: index */
 #ifdef USE_NNTP
   { "followup-message",          OP_FOLLOWUP,                       NULL },
 #endif
-  { "forget-passphrase",         OP_FORGET_PASSPHRASE,              "\006" },
+  { "forget-passphrase",         OP_FORGET_PASSPHRASE,              "\006" },   // <Ctrl-F>
   { "forward-message",           OP_FORWARD_MESSAGE,                "f" },
 #ifdef USE_NNTP
   { "forward-to-group",          OP_FORWARD_TO_GROUP,               NULL },
@@ -150,6 +161,7 @@ const struct Binding OpMain[] = { /* map: index */
   { "get-message",               OP_GET_MESSAGE,                    NULL },
   { "get-parent",                OP_GET_PARENT,                     NULL },
 #endif
+  { "group-chat-reply",          OP_GROUP_CHAT_REPLY,               NULL },
   { "group-reply",               OP_GROUP_REPLY,                    "g" },
 #ifdef USE_IMAP
   { "imap-fetch-mail",           OP_MAIN_IMAP_FETCH,                NULL },
@@ -160,16 +172,17 @@ const struct Binding OpMain[] = { /* map: index */
   { "link-threads",              OP_MAIN_LINK_THREADS,              "&" },
   { "list-reply",                OP_LIST_REPLY,                     "L" },
   { "mail",                      OP_MAIL,                           "m" },
-  { "mail-key",                  OP_MAIL_KEY,                       "\033k" },
+  { "mail-key",                  OP_MAIL_KEY,                       "\033k" },  // <Alt-k>
+  { "mailbox-list",              OP_MAILBOX_LIST,                   "." },
   { "mark-message",              OP_MARK_MSG,                       "~" },
-  { "modify-labels",             OP_MAIN_MODIFY_TAGS,               NULL }, // NOTE(silent): kept for backward compatibility
-  { "modify-labels-then-hide",   OP_MAIN_MODIFY_TAGS_THEN_HIDE,     NULL }, // NOTE(silent): kept for backward compatibility
+  { "modify-labels",             OP_MAIN_MODIFY_TAGS,               NULL }, // NOTE(sileht): kept for backward compatibility
+  { "modify-labels-then-hide",   OP_MAIN_MODIFY_TAGS_THEN_HIDE,     NULL }, // NOTE(sileht): kept for backward compatibility
   { "modify-tags",               OP_MAIN_MODIFY_TAGS,               NULL },
   { "modify-tags-then-hide",     OP_MAIN_MODIFY_TAGS_THEN_HIDE,     NULL },
   { "next-new",                  OP_MAIN_NEXT_NEW,                  NULL },
   { "next-new-then-unread",      OP_MAIN_NEXT_NEW_THEN_UNREAD,      "\t" },
-  { "next-subthread",            OP_MAIN_NEXT_SUBTHREAD,            "\033n" },
-  { "next-thread",               OP_MAIN_NEXT_THREAD,               "\016" },
+  { "next-subthread",            OP_MAIN_NEXT_SUBTHREAD,            "\033n" },  // <Alt-n>
+  { "next-thread",               OP_MAIN_NEXT_THREAD,               "\016" },   // <Ctrl-N>
   { "next-undeleted",            OP_MAIN_NEXT_UNDELETED,            "j" },
   { "next-unread",               OP_MAIN_NEXT_UNREAD,               NULL },
   { "next-unread-mailbox",       OP_MAIN_NEXT_UNREAD_MAILBOX,       NULL },
@@ -179,9 +192,9 @@ const struct Binding OpMain[] = { /* map: index */
   { "post-message",              OP_POST,                           NULL },
 #endif
   { "previous-new",              OP_MAIN_PREV_NEW,                  NULL },
-  { "previous-new-then-unread",  OP_MAIN_PREV_NEW_THEN_UNREAD,      "\033\t" },
-  { "previous-subthread",        OP_MAIN_PREV_SUBTHREAD,            "\033p" },
-  { "previous-thread",           OP_MAIN_PREV_THREAD,               "\020" },
+  { "previous-new-then-unread",  OP_MAIN_PREV_NEW_THEN_UNREAD,      "\033\t" }, // <Alt-\>
+  { "previous-subthread",        OP_MAIN_PREV_SUBTHREAD,            "\033p" },  // <Alt-p>
+  { "previous-thread",           OP_MAIN_PREV_THREAD,               "\020" },   // <Ctrl-P>
   { "previous-undeleted",        OP_MAIN_PREV_UNDELETED,            "k" },
   { "previous-unread",           OP_MAIN_PREV_UNREAD,               NULL },
   { "print-message",             OP_PRINT,                          "p" },
@@ -190,18 +203,18 @@ const struct Binding OpMain[] = { /* map: index */
   { "quasi-delete",              OP_MAIN_QUASI_DELETE,              NULL },
   { "query",                     OP_QUERY,                          "Q" },
   { "quit",                      OP_QUIT,                           "q" },
-  { "read-subthread",            OP_MAIN_READ_SUBTHREAD,            "\033r" },
-  { "read-thread",               OP_MAIN_READ_THREAD,               "\022" },
+  { "read-subthread",            OP_MAIN_READ_SUBTHREAD,            "\033r" },  // <Alt-r>
+  { "read-thread",               OP_MAIN_READ_THREAD,               "\022" },   // <Ctrl-R>
   { "recall-message",            OP_RECALL_MESSAGE,                 "R" },
 #ifdef USE_NNTP
   { "reconstruct-thread",        OP_RECONSTRUCT_THREAD,             NULL },
 #endif
   { "reply",                     OP_REPLY,                          "r" },
-  { "resend-message",            OP_RESEND,                         "\033e" },
+  { "resend-message",            OP_RESEND,                         "\033e" },  // <Alt-e>
   { "root-message",              OP_MAIN_ROOT_MESSAGE,              NULL },
   { "save-message",              OP_SAVE,                           "s" },
   { "set-flag",                  OP_MAIN_SET_FLAG,                  "w" },
-  { "show-limit",                OP_MAIN_SHOW_LIMIT,                "\033l" },
+  { "show-limit",                OP_MAIN_SHOW_LIMIT,                "\033l" },  // <Alt-l>
   { "show-log-messages",         OP_SHOW_LOG_MESSAGES,              "M" },
   { "show-version",              OP_VERSION,                        "V" },
 #ifdef USE_SIDEBAR
@@ -220,73 +233,80 @@ const struct Binding OpMain[] = { /* map: index */
   { "sync-mailbox",              OP_MAIN_SYNC_FOLDER,               "$" },
   { "tag-pattern",               OP_MAIN_TAG_PATTERN,               "T" },
   { "tag-subthread",             OP_TAG_SUBTHREAD,                  NULL },
-  { "tag-thread",                OP_TAG_THREAD,                     "\033t" },
+  { "tag-thread",                OP_TAG_THREAD,                     "\033t" },  // <Alt-t>
   { "toggle-new",                OP_TOGGLE_NEW,                     "N" },
   { "toggle-read",               OP_TOGGLE_READ,                    NULL },
   { "toggle-write",              OP_TOGGLE_WRITE,                   "%" },
   { "undelete-message",          OP_UNDELETE,                       "u" },
   { "undelete-pattern",          OP_MAIN_UNDELETE_PATTERN,          "U" },
-  { "undelete-subthread",        OP_UNDELETE_SUBTHREAD,             "\033u" },
-  { "undelete-thread",           OP_UNDELETE_THREAD,                "\025" },
-  { "untag-pattern",             OP_MAIN_UNTAG_PATTERN,             "\024" },
+  { "undelete-subthread",        OP_UNDELETE_SUBTHREAD,             "\033u" },  // <Alt-u>
+  { "undelete-thread",           OP_UNDELETE_THREAD,                "\025" },   // <Ctrl-U>
+  { "untag-pattern",             OP_MAIN_UNTAG_PATTERN,             "\024" },   // <Ctrl-T>
 #ifdef USE_NOTMUCH
   { "vfolder-from-query",        OP_MAIN_VFOLDER_FROM_QUERY,        NULL },
+  { "vfolder-from-query-readonly", OP_MAIN_VFOLDER_FROM_QUERY_READONLY, NULL },
   { "vfolder-window-backward",   OP_MAIN_WINDOWED_VFOLDER_BACKWARD, NULL },
   { "vfolder-window-forward",    OP_MAIN_WINDOWED_VFOLDER_FORWARD,  NULL },
 #endif
   { "view-attachments",          OP_VIEW_ATTACHMENTS,               "v" },
   { "view-raw-message",          OP_VIEW_RAW_MESSAGE,               NULL },
+  /* This is deprecated.  Leave it last so it doesn't show up in the help. */
+  { "buffy-list",                OP_MAILBOX_LIST,                   NULL },
   { NULL,                        0,                                 NULL },
 };
 
+/**
+ * OpPager - Key bindings for the pager menu
+ */
 const struct Binding OpPager[] = { /* map: pager */
   { "bottom",                    OP_PAGER_BOTTOM,                 NULL },
   { "bounce-message",            OP_BOUNCE_MESSAGE,               "b" },
   { "break-thread",              OP_MAIN_BREAK_THREAD,            "#" },
-  { "buffy-list",                OP_BUFFY_LIST,                   "." },
   { "change-folder",             OP_MAIN_CHANGE_FOLDER,           "c" },
-  { "change-folder-readonly",    OP_MAIN_CHANGE_FOLDER_READONLY,  "\033c" },
+  { "change-folder-readonly",    OP_MAIN_CHANGE_FOLDER_READONLY,  "\033c" },    // <Alt-c>
 #ifdef USE_NNTP
-  { "change-newsgroup",          OP_MAIN_CHANGE_GROUP,            NULL },
-  { "change-newsgroup-readonly", OP_MAIN_CHANGE_GROUP_READONLY,   NULL },
+  { "change-newsgroup",          OP_MAIN_CHANGE_GROUP,            "i" },
+  { "change-newsgroup-readonly", OP_MAIN_CHANGE_GROUP_READONLY,   "\033i" },    // <Alt-i>
 #endif
 #ifdef USE_NOTMUCH
   { "change-vfolder",            OP_MAIN_CHANGE_VFOLDER,          NULL },
 #endif
-  { "check-traditional-pgp",     OP_CHECK_TRADITIONAL,            "\033P" },
+  { "check-stats",               OP_CHECK_STATS,                  NULL },
+  { "check-traditional-pgp",     OP_CHECK_TRADITIONAL,            "\033P" },    // <Alt-P>
   { "clear-flag",                OP_MAIN_CLEAR_FLAG,              "W" },
   { "compose-to-sender",         OP_COMPOSE_TO_SENDER,            NULL },
   { "copy-message",              OP_COPY_MESSAGE,                 "C" },
   { "create-alias",              OP_CREATE_ALIAS,                 "a" },
-  { "decode-copy",               OP_DECODE_COPY,                  "\033C" },
-  { "decode-save",               OP_DECODE_SAVE,                  "\033s" },
+  { "decode-copy",               OP_DECODE_COPY,                  "\033C" },    // <Alt-C>
+  { "decode-save",               OP_DECODE_SAVE,                  "\033s" },    // <Alt-s>
   { "decrypt-copy",              OP_DECRYPT_COPY,                 NULL },
   { "decrypt-save",              OP_DECRYPT_SAVE,                 NULL },
   { "delete-message",            OP_DELETE,                       "d" },
-  { "delete-subthread",          OP_DELETE_SUBTHREAD,             "\033d" },
-  { "delete-thread",             OP_DELETE_THREAD,                "\004" },
+  { "delete-subthread",          OP_DELETE_SUBTHREAD,             "\033d" },    // <Alt-d>
+  { "delete-thread",             OP_DELETE_THREAD,                "\004" },     // <Ctrl-D>
   { "display-address",           OP_DISPLAY_ADDRESS,              "@" },
   { "display-toggle-weed",       OP_DISPLAY_HEADERS,              "h" },
   { "edit",                      OP_EDIT_RAW_MESSAGE,             NULL },
   { "edit-label",                OP_EDIT_LABEL,                   "Y" },
   { "edit-or-view-raw-message",  OP_EDIT_OR_VIEW_RAW_MESSAGE,     "e" },
   { "edit-raw-message",          OP_EDIT_RAW_MESSAGE,             NULL },
-  { "edit-type",                 OP_EDIT_TYPE,                    "\005" },
+  { "edit-type",                 OP_EDIT_TYPE,                    "\005" },     // <Ctrl-E>
   { "enter-command",             OP_ENTER_COMMAND,                ":" },
 #ifdef USE_NOTMUCH
   { "entire-thread",             OP_MAIN_ENTIRE_THREAD,           NULL },
 #endif
   { "exit",                      OP_EXIT,                         "q" },
-  { "extract-keys",              OP_EXTRACT_KEYS,                 "\013" },
+  { "extract-keys",              OP_EXTRACT_KEYS,                 "\013" },     // <Ctrl-K>
   { "flag-message",              OP_FLAG_MESSAGE,                 "F" },
 #ifdef USE_NNTP
   { "followup-message",          OP_FOLLOWUP,                     NULL },
 #endif
-  { "forget-passphrase",         OP_FORGET_PASSPHRASE,            "\006" },
+  { "forget-passphrase",         OP_FORGET_PASSPHRASE,            "\006" },     // <Ctrl-F>
   { "forward-message",           OP_FORWARD_MESSAGE,              "f" },
 #ifdef USE_NNTP
   { "forward-to-group",          OP_FORWARD_TO_GROUP,             NULL },
 #endif
+  { "group-chat-reply",          OP_GROUP_CHAT_REPLY,             NULL },
   { "group-reply",               OP_GROUP_REPLY,                  "g" },
   { "half-down",                 OP_HALF_DOWN,                    NULL },
   { "half-up",                   OP_HALF_UP,                      NULL },
@@ -299,20 +319,21 @@ const struct Binding OpPager[] = { /* map: pager */
   { "link-threads",              OP_MAIN_LINK_THREADS,            "&" },
   { "list-reply",                OP_LIST_REPLY,                   "L" },
   { "mail",                      OP_MAIL,                         "m" },
-  { "mail-key",                  OP_MAIL_KEY,                     "\033k" },
+  { "mail-key",                  OP_MAIL_KEY,                     "\033k" },    // <Alt-k>
+  { "mailbox-list",              OP_MAILBOX_LIST,                 "." },
   { "mark-as-new",               OP_TOGGLE_NEW,                   "N" },
-  { "modify-labels",             OP_MAIN_MODIFY_TAGS,             NULL }, // NOTE(silent): kept for backward compatibility
-  { "modify-labels-then-hide",   OP_MAIN_MODIFY_TAGS_THEN_HIDE,   NULL }, // NOTE(silent): kept for backward compatibility
+  { "modify-labels",             OP_MAIN_MODIFY_TAGS,             NULL }, // NOTE(sileht): kept for backward compatibility
+  { "modify-labels-then-hide",   OP_MAIN_MODIFY_TAGS_THEN_HIDE,   NULL }, // NOTE(sileht): kept for backward compatibility
   { "modify-tags",               OP_MAIN_MODIFY_TAGS,             NULL },
   { "modify-tags-then-hide",     OP_MAIN_MODIFY_TAGS_THEN_HIDE,   NULL },
   { "next-entry",                OP_NEXT_ENTRY,                   "J" },
-  { "next-line",                 OP_NEXT_LINE,                    "\n" },
+  { "next-line",                 OP_NEXT_LINE,                    "\n" },       // <Enter>
   { "next-line",                 OP_NEXT_LINE,                    "\r" },
   { "next-new",                  OP_MAIN_NEXT_NEW,                NULL },
   { "next-new-then-unread",      OP_MAIN_NEXT_NEW_THEN_UNREAD,    "\t" },
   { "next-page",                 OP_NEXT_PAGE,                    " " },
-  { "next-subthread",            OP_MAIN_NEXT_SUBTHREAD,          "\033n" },
-  { "next-thread",               OP_MAIN_NEXT_THREAD,             "\016" },
+  { "next-subthread",            OP_MAIN_NEXT_SUBTHREAD,          "\033n" },    // <Alt-n>
+  { "next-thread",               OP_MAIN_NEXT_THREAD,             "\016" },     // <Ctrl-N>
   { "next-undeleted",            OP_MAIN_NEXT_UNDELETED,          "j" },
   { "next-unread",               OP_MAIN_NEXT_UNREAD,             NULL },
   { "next-unread-mailbox",       OP_MAIN_NEXT_UNREAD_MAILBOX,     NULL },
@@ -326,8 +347,8 @@ const struct Binding OpPager[] = { /* map: pager */
   { "previous-new",              OP_MAIN_PREV_NEW,                NULL },
   { "previous-new-then-unread",  OP_MAIN_PREV_NEW_THEN_UNREAD,    NULL },
   { "previous-page",             OP_PREV_PAGE,                    "-" },
-  { "previous-subthread",        OP_MAIN_PREV_SUBTHREAD,          "\033p" },
-  { "previous-thread",           OP_MAIN_PREV_THREAD,             "\020" },
+  { "previous-subthread",        OP_MAIN_PREV_SUBTHREAD,          "\033p" },    // <Alt-p>
+  { "previous-thread",           OP_MAIN_PREV_THREAD,             "\020" },     // <Ctrl-P>
   { "previous-undeleted",        OP_MAIN_PREV_UNDELETED,          "k" },
   { "previous-unread",           OP_MAIN_PREV_UNREAD,             NULL },
   { "print-message",             OP_PRINT,                        "p" },
@@ -335,22 +356,22 @@ const struct Binding OpPager[] = { /* map: pager */
   { "purge-thread",              OP_PURGE_THREAD,                 NULL },
   { "quasi-delete",              OP_MAIN_QUASI_DELETE,            NULL },
   { "quit",                      OP_QUIT,                         "Q" },
-  { "read-subthread",            OP_MAIN_READ_SUBTHREAD,          "\033r" },
-  { "read-thread",               OP_MAIN_READ_THREAD,             "\022" },
+  { "read-subthread",            OP_MAIN_READ_SUBTHREAD,          "\033r" },    // <Alt-r>
+  { "read-thread",               OP_MAIN_READ_THREAD,             "\022" },     // <Ctrl-R>
   { "recall-message",            OP_RECALL_MESSAGE,               "R" },
 #ifdef USE_NNTP
   { "reconstruct-thread",        OP_RECONSTRUCT_THREAD,           NULL },
 #endif
-  { "redraw-screen",             OP_REDRAW,                       "\014" },
+  { "redraw-screen",             OP_REDRAW,                       "\014" },     // <Ctrl-L>
   { "reply",                     OP_REPLY,                        "r" },
-  { "resend-message",            OP_RESEND,                       "\033e" },
+  { "resend-message",            OP_RESEND,                       "\033e" },    // <Alt-e>
   { "root-message",              OP_MAIN_ROOT_MESSAGE,            NULL },
   { "save-message",              OP_SAVE,                         "s" },
   { "search",                    OP_SEARCH,                       "/" },
   { "search-next",               OP_SEARCH_NEXT,                  "n" },
   { "search-opposite",           OP_SEARCH_OPPOSITE,              NULL },
-  { "search-reverse",            OP_SEARCH_REVERSE,               "\033/" },
-  { "search-toggle",             OP_SEARCH_TOGGLE,                "\\" },
+  { "search-reverse",            OP_SEARCH_REVERSE,               "\033/" },    // <Alt-/>
+  { "search-toggle",             OP_SEARCH_TOGGLE,                "\\" },       // <Backslash>
   { "set-flag",                  OP_MAIN_SET_FLAG,                "w" },
   { "shell-escape",              OP_SHELL_ESCAPE,                 "!" },
   { "show-version",              OP_VERSION,                      "V" },
@@ -371,56 +392,71 @@ const struct Binding OpPager[] = { /* map: pager */
   { "sync-mailbox",              OP_MAIN_SYNC_FOLDER,             "$" },
   { "tag-message",               OP_TAG,                          "t" },
   { "toggle-quoted",             OP_PAGER_HIDE_QUOTED,            "T" },
+  { "toggle-write",              OP_TOGGLE_WRITE,                 "%" },
   { "top",                       OP_PAGER_TOP,                    "^" },
   { "undelete-message",          OP_UNDELETE,                     "u" },
-  { "undelete-subthread",        OP_UNDELETE_SUBTHREAD,           "\033u" },
-  { "undelete-thread",           OP_UNDELETE_THREAD,              "\025" },
+  { "undelete-subthread",        OP_UNDELETE_SUBTHREAD,           "\033u" },    // <Alt-u>
+  { "undelete-thread",           OP_UNDELETE_THREAD,              "\025" },     // <Ctrl-U>
 #ifdef USE_NOTMUCH
   { "vfolder-from-query",        OP_MAIN_VFOLDER_FROM_QUERY,      NULL },
+  { "vfolder-from-query-readonly", OP_MAIN_VFOLDER_FROM_QUERY_READONLY, NULL },
 #endif
   { "view-attachments",          OP_VIEW_ATTACHMENTS,             "v" },
   { "view-raw-message",          OP_VIEW_RAW_MESSAGE,             NULL },
   { "what-key",                  OP_WHAT_KEY,                     NULL },
+  /* This is deprecated.  Leave it last so it doesn't show up in the help. */
+  { "buffy-list",                OP_MAILBOX_LIST,                 NULL },
   { NULL,                        0,                               NULL },
 };
 
+/**
+ * OpAttach - Key bindings for the attachment menu
+ */
 const struct Binding OpAttach[] = { /* map: attachment */
   { "bounce-message",        OP_BOUNCE_MESSAGE,              "b" },
-  { "check-traditional-pgp", OP_CHECK_TRADITIONAL,           "\033P" },
+  { "check-traditional-pgp", OP_CHECK_TRADITIONAL,           "\033P" },         // <Alt-P>
   { "collapse-parts",        OP_ATTACH_COLLAPSE,             "v" },
+  { "compose-to-sender",     OP_COMPOSE_TO_SENDER,           NULL },
   { "delete-entry",          OP_DELETE,                      "d" },
   { "display-toggle-weed",   OP_DISPLAY_HEADERS,             "h" },
-  { "edit-type",             OP_EDIT_TYPE,                   "\005" },
-  { "extract-keys",          OP_EXTRACT_KEYS,                "\013" },
+  { "edit-type",             OP_EDIT_TYPE,                   "\005" },          // <Ctrl-E>
+  { "extract-keys",          OP_EXTRACT_KEYS,                "\013" },          // <Ctrl-K>
 #ifdef USE_NNTP
   { "followup-message",      OP_FOLLOWUP,                    NULL },
 #endif
-  { "forget-passphrase",     OP_FORGET_PASSPHRASE,           "\006" },
+  { "forget-passphrase",     OP_FORGET_PASSPHRASE,           "\006" },          // <Ctrl-F>
   { "forward-message",       OP_FORWARD_MESSAGE,             "f" },
 #ifdef USE_NNTP
   { "forward-to-group",      OP_FORWARD_TO_GROUP,            NULL },
 #endif
+  { "group-chat-reply",      OP_GROUP_CHAT_REPLY,            NULL },
   { "group-reply",           OP_GROUP_REPLY,                 "g" },
   { "list-reply",            OP_LIST_REPLY,                  "L" },
   { "pipe-entry",            OP_PIPE,                        "|" },
   { "print-entry",           OP_PRINT,                       "p" },
   { "reply",                 OP_REPLY,                       "r" },
-  { "resend-message",        OP_RESEND,                      "\033e" },
+  { "resend-message",        OP_RESEND,                      "\033e" },         // <Alt-e>
   { "save-entry",            OP_SAVE,                        "s" },
   { "undelete-entry",        OP_UNDELETE,                    "u" },
-  { "view-attach",           OP_VIEW_ATTACH,                 "\n" },
+  { "view-attach",           OP_VIEW_ATTACH,                 "\n" },            // <Enter>
   { "view-attach",           OP_VIEW_ATTACH,                 "\r" },
   { "view-mailcap",          OP_ATTACH_VIEW_MAILCAP,         "m" },
   { "view-text",             OP_ATTACH_VIEW_TEXT,            "T" },
   { NULL,                    0,                              NULL },
 };
 
+/**
+ * OpCompose - Key bindings for the compose menu
+ */
 const struct Binding OpCompose[] = { /* map: compose */
   { "attach-file",           OP_COMPOSE_ATTACH_FILE,         "a" },
-  { "attach-key",            OP_COMPOSE_ATTACH_KEY,          "\033k" },
+  { "attach-key",            OP_COMPOSE_ATTACH_KEY,          "\033k" },         // <Alt-k>
   { "attach-message",        OP_COMPOSE_ATTACH_MESSAGE,      "A" },
 #ifdef USE_NNTP
   { "attach-news-message",   OP_COMPOSE_ATTACH_NEWS_MESSAGE, NULL },
+#endif
+#ifdef USE_AUTOCRYPT
+  { "autocrypt-menu",        OP_COMPOSE_AUTOCRYPT_MENU,      "o" },
 #endif
   { "copy-file",             OP_SAVE,                        "C" },
   { "detach-file",           OP_DELETE,                      "D" },
@@ -428,15 +464,15 @@ const struct Binding OpCompose[] = { /* map: compose */
   { "edit-bcc",              OP_COMPOSE_EDIT_BCC,            "b" },
   { "edit-cc",               OP_COMPOSE_EDIT_CC,             "c" },
   { "edit-description",      OP_COMPOSE_EDIT_DESCRIPTION,    "d" },
-  { "edit-encoding",         OP_COMPOSE_EDIT_ENCODING,       "\005" },
+  { "edit-encoding",         OP_COMPOSE_EDIT_ENCODING,       "\005" },          // <Ctrl-E>
   { "edit-fcc",              OP_COMPOSE_EDIT_FCC,            "f" },
-  { "edit-file",             OP_COMPOSE_EDIT_FILE,           "\030e" },
+  { "edit-file",             OP_COMPOSE_EDIT_FILE,           "\030e" },         // <Alt-e>
 #ifdef USE_NNTP
   { "edit-followup-to",      OP_COMPOSE_EDIT_FOLLOWUP_TO,    NULL },
 #endif
-  { "edit-from",             OP_COMPOSE_EDIT_FROM,           "\033f" },
+  { "edit-from",             OP_COMPOSE_EDIT_FROM,           "\033f" },         // <Alt-f>
   { "edit-headers",          OP_COMPOSE_EDIT_HEADERS,        "E" },
-  { "edit-language",         OP_COMPOSE_EDIT_LANGUAGE,       "\014" },
+  { "edit-language",         OP_COMPOSE_EDIT_LANGUAGE,       "\014" },          // <Ctrl-L>
   { "edit-message",          OP_COMPOSE_EDIT_MESSAGE,        "e" },
   { "edit-mime",             OP_COMPOSE_EDIT_MIME,           "m" },
 #ifdef USE_NNTP
@@ -445,12 +481,12 @@ const struct Binding OpCompose[] = { /* map: compose */
   { "edit-reply-to",         OP_COMPOSE_EDIT_REPLY_TO,       "r" },
   { "edit-subject",          OP_COMPOSE_EDIT_SUBJECT,        "s" },
   { "edit-to",               OP_COMPOSE_EDIT_TO,             "t" },
-  { "edit-type",             OP_EDIT_TYPE,                   "\024" },
+  { "edit-type",             OP_EDIT_TYPE,                   "\024" },          // <Ctrl-T>
 #ifdef USE_NNTP
   { "edit-x-comment-to",     OP_COMPOSE_EDIT_X_COMMENT_TO,   NULL },
 #endif
   { "filter-entry",          OP_FILTER,                      "F" },
-  { "forget-passphrase",     OP_FORGET_PASSPHRASE,           "\006" },
+  { "forget-passphrase",     OP_FORGET_PASSPHRASE,           "\006" },          // <Ctrl-F>
   { "get-attachment",        OP_COMPOSE_GET_ATTACHMENT,      "G" },
   { "group-alternatives",    OP_COMPOSE_GROUP_ALTS,          "&" },
   { "group-multilingual",    OP_COMPOSE_GROUP_LINGUAL,       "^" },
@@ -465,35 +501,42 @@ const struct Binding OpCompose[] = { /* map: compose */
   { "pipe-entry",            OP_PIPE,                        "|" },
   { "postpone-message",      OP_COMPOSE_POSTPONE_MESSAGE,    "P" },
   { "print-entry",           OP_PRINT,                       "l" },
-  { "rename-attachment",     OP_COMPOSE_RENAME_ATTACHMENT,   "\017" },
+  { "rename-attachment",     OP_COMPOSE_RENAME_ATTACHMENT,   "\017" },          // <Ctrl-O>
   { "rename-file",           OP_COMPOSE_RENAME_FILE,         "R" },
   { "send-message",          OP_COMPOSE_SEND_MESSAGE,        "y" },
   { "smime-menu",            OP_COMPOSE_SMIME_MENU,          "S" },
-  { "toggle-disposition",    OP_COMPOSE_TOGGLE_DISPOSITION,  "\004" },
+  { "toggle-disposition",    OP_COMPOSE_TOGGLE_DISPOSITION,  "\004" },          // <Ctrl-D>
   { "toggle-recode",         OP_COMPOSE_TOGGLE_RECODE,       NULL },
   { "toggle-unlink",         OP_COMPOSE_TOGGLE_UNLINK,       "u" },
   { "update-encoding",       OP_COMPOSE_UPDATE_ENCODING,     "U" },
-  { "view-attach",           OP_VIEW_ATTACH,                 "\n" },
+  { "view-attach",           OP_VIEW_ATTACH,                 "\n" },            // <Enter>
   { "view-attach",           OP_VIEW_ATTACH,                 "\r" },
   { "write-fcc",             OP_COMPOSE_WRITE_MESSAGE,       "w" },
   { NULL,                    0,                              NULL },
 };
 
+/**
+ * OpPost - Key bindings for the postpone menu
+ */
 const struct Binding OpPost[] = { /* map: postpone */
   { "delete-entry",          OP_DELETE,                      "d" },
   { "undelete-entry",        OP_UNDELETE,                    "u" },
   { NULL,                    0,                              NULL },
 };
 
+/**
+ * OpAlias - Key bindings for the alias menu
+ */
 const struct Binding OpAlias[] = { /* map: alias */
   { "delete-entry",          OP_DELETE,                      "d" },
   { "undelete-entry",        OP_UNDELETE,                    "u" },
   { NULL,                    0,                              NULL },
 };
 
-/* The file browser */
+/**
+ * OpBrowser - Key bindings for the file browser menu
+ */
 const struct Binding OpBrowser[] = { /* map: browser */
-  { "buffy-list",            OP_BUFFY_LIST,                  "." },
 #ifdef USE_NNTP
   { "catchup",               OP_CATCHUP,                     NULL },
 #endif
@@ -503,10 +546,12 @@ const struct Binding OpBrowser[] = { /* map: browser */
   { "create-mailbox",        OP_CREATE_MAILBOX,              "C" },
   { "delete-mailbox",        OP_DELETE_MAILBOX,              "d" },
 #endif
+  { "descend-directory",     OP_DESCEND_DIRECTORY,           NULL },
   { "display-filename",      OP_BROWSER_TELL,                "@" },
   { "enter-mask",            OP_ENTER_MASK,                  "m" },
   { "goto-folder",           OP_BROWSER_GOTO_FOLDER,         "=" },
   { "goto-parent",           OP_GOTO_PARENT,                 "p" },
+  { "mailbox-list",          OP_MAILBOX_LIST,                "." },
 #ifdef USE_NNTP
   { "reload-active",         OP_LOAD_ACTIVE,                 NULL },
 #endif
@@ -536,10 +581,14 @@ const struct Binding OpBrowser[] = { /* map: browser */
   { "unsubscribe-pattern",   OP_UNSUBSCRIBE_PATTERN,         NULL },
 #endif
   { "view-file",             OP_BROWSER_VIEW_FILE,           " " },
+  /* This is deprecated.  Leave it last so it doesn't show up in the help. */
+  { "buffy-list",            OP_MAILBOX_LIST,                NULL },
   { NULL,                    0,                              NULL },
 };
 
-/* External Query Menu */
+/**
+ * OpQuery - Key bindings for the external query menu
+ */
 const struct Binding OpQuery[] = { /* map: query */
   { "create-alias",          OP_CREATE_ALIAS,                "a" },
   { "mail",                  OP_MAIL,                        "m" },
@@ -548,41 +597,50 @@ const struct Binding OpQuery[] = { /* map: query */
   { NULL,                    0,                              NULL },
 };
 
+/**
+ * OpEditor - Key bindings for the editor menu
+ */
 const struct Binding OpEditor[] = { /* map: editor */
-  { "backspace",             OP_EDITOR_BACKSPACE,            "\010" },
-  { "backward-char",         OP_EDITOR_BACKWARD_CHAR,        "\002" },
-  { "backward-word",         OP_EDITOR_BACKWARD_WORD,        "\033b" },
-  { "bol",                   OP_EDITOR_BOL,                  "\001" },
-  { "buffy-cycle",           OP_EDITOR_BUFFY_CYCLE,          " " },
-  { "capitalize-word",       OP_EDITOR_CAPITALIZE_WORD,      "\033c" },
-  { "complete",              OP_EDITOR_COMPLETE,             "\t" },
-  { "complete-query",        OP_EDITOR_COMPLETE_QUERY,       "\024" },
-  { "delete-char",           OP_EDITOR_DELETE_CHAR,          "\004" },
-  { "downcase-word",         OP_EDITOR_DOWNCASE_WORD,        "\033l" },
-  { "eol",                   OP_EDITOR_EOL,                  "\005" },
-  { "forward-char",          OP_EDITOR_FORWARD_CHAR,         "\006" },
-  { "forward-word",          OP_EDITOR_FORWARD_WORD,         "\033f" },
+  { "backspace",             OP_EDITOR_BACKSPACE,            "\010" },          // <Ctrl-H>
+  { "backward-char",         OP_EDITOR_BACKWARD_CHAR,        "\002" },          // <Ctrl-B>
+  { "backward-word",         OP_EDITOR_BACKWARD_WORD,        "\033b" },         // <Alt-b>
+  { "bol",                   OP_EDITOR_BOL,                  "\001" },          // <Ctrl-A>
+  { "capitalize-word",       OP_EDITOR_CAPITALIZE_WORD,      "\033c" },         // <Alt-c>
+  { "complete",              OP_EDITOR_COMPLETE,             "\t" },            // <Tab>
+  { "complete-query",        OP_EDITOR_COMPLETE_QUERY,       "\024" },          // <Ctrl-T>
+  { "delete-char",           OP_EDITOR_DELETE_CHAR,          "\004" },          // <Ctrl-D>
+  { "downcase-word",         OP_EDITOR_DOWNCASE_WORD,        "\033l" },         // <Alt-l>
+  { "eol",                   OP_EDITOR_EOL,                  "\005" },          // <Ctrl-E>
+  { "forward-char",          OP_EDITOR_FORWARD_CHAR,         "\006" },          // <Ctrl-F>
+  { "forward-word",          OP_EDITOR_FORWARD_WORD,         "\033f" },         // <Alt-f>
   { "history-down",          OP_EDITOR_HISTORY_DOWN,         NULL },
-  { "history-search",        OP_EDITOR_HISTORY_SEARCH,       "\022" },
+  { "history-search",        OP_EDITOR_HISTORY_SEARCH,       "\022" },          // <Ctrl-R>
   { "history-up",            OP_EDITOR_HISTORY_UP,           NULL },
-  { "kill-eol",              OP_EDITOR_KILL_EOL,             "\013" },
-  { "kill-eow",              OP_EDITOR_KILL_EOW,             "\033d" },
-  { "kill-line",             OP_EDITOR_KILL_LINE,            "\025" },
-  { "kill-word",             OP_EDITOR_KILL_WORD,            "\027" },
-  { "quote-char",            OP_EDITOR_QUOTE_CHAR,           "\026" },
+  { "kill-eol",              OP_EDITOR_KILL_EOL,             "\013" },          // <Ctrl-K>
+  { "kill-eow",              OP_EDITOR_KILL_EOW,             "\033d" },         // <Alt-d>
+  { "kill-line",             OP_EDITOR_KILL_LINE,            "\025" },          // <Ctrl-U>
+  { "kill-word",             OP_EDITOR_KILL_WORD,            "\027" },          // <Ctrl-W>
+  { "mailbox-cycle",         OP_EDITOR_MAILBOX_CYCLE,        " " },
+  { "quote-char",            OP_EDITOR_QUOTE_CHAR,           "\026" },          // <Ctrl-V>
   { "transpose-chars",       OP_EDITOR_TRANSPOSE_CHARS,      NULL },
-  { "upcase-word",           OP_EDITOR_UPCASE_WORD,          "\033u" },
+  { "upcase-word",           OP_EDITOR_UPCASE_WORD,          "\033u" },         // <Alt-u>
+  /* This is deprecated.  Leave it last so it doesn't show up in the help. */
+  { "buffy-cycle",           OP_EDITOR_MAILBOX_CYCLE,        NULL },
   { NULL,                    0,                              NULL },
 };
 
+/**
+ * OpPgp - Key bindings for the pgp menu
+ */
 const struct Binding OpPgp[] = { /* map: pgp */
   { "verify-key",            OP_VERIFY_KEY,                  "c" },
   { "view-name",             OP_VIEW_ID,                     "%" },
   { NULL,                    0,                              NULL },
 };
 
-/* When using the GPGME based backend we have some useful functions
-   for the SMIME menu. */
+/**
+ * OpSmime - Key bindings for the smime menu
+ */
 const struct Binding OpSmime[] = { /* map: smime */
 #ifdef CRYPT_BACKEND_GPGME
   { "verify-key",            OP_VERIFY_KEY,                  "c" },
@@ -592,9 +650,12 @@ const struct Binding OpSmime[] = { /* map: smime */
 };
 
 #ifdef MIXMASTER
+/**
+ * OpMix - Key bindings for the mixmaster menu
+ */
 const struct Binding OpMix[] = { /* map: mixmaster */
-  { "accept",                OP_MIX_USE,                     "\n" },
-  { "accept",                OP_MIX_USE,                     "\r" },
+  { "accept",                OP_MIX_USE,                     "\n" },            // <Enter>
+  { "accept",                OP_MIX_USE,                     "\r" },            // <Return>
   { "append",                OP_MIX_APPEND,                  "a" },
   { "chain-next",            OP_MIX_CHAIN_NEXT,              "<right>" },
   { "chain-prev",            OP_MIX_CHAIN_PREV,              "<left>" },
@@ -603,6 +664,20 @@ const struct Binding OpMix[] = { /* map: mixmaster */
   { NULL,                    0,                              NULL },
 };
 #endif /* MIXMASTER */
+
+#ifdef USE_AUTOCRYPT
+/**
+ * OpAutocryptAcct - Key bindings for the autocrypt account
+ */
+const struct Binding OpAutocryptAcct[] = { /* map: autocrypt account */
+  { "create-account",        OP_AUTOCRYPT_CREATE_ACCT,       "c" },
+  { "delete-account",        OP_AUTOCRYPT_DELETE_ACCT,       "D" },
+  { "toggle-active",         OP_AUTOCRYPT_TOGGLE_ACTIVE,     "a" },
+  { "toggle-prefer-encrypt", OP_AUTOCRYPT_TOGGLE_PREFER,     "p" },
+  { NULL,                    0,                              NULL }
+};
+#endif
+
 // clang-format on
 
-#endif /* _MUTT_FUNCTIONS_H */
+#endif /* MUTT_FUNCTIONS_H */

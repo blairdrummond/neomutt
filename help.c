@@ -20,6 +20,12 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @page help Generate the help-line and help-page and GUI display them
+ *
+ * Generate the help-line and help-page and GUI display them
+ */
+
 #include "config.h"
 #include <stddef.h>
 #include <limits.h>
@@ -28,14 +34,13 @@
 #include <string.h>
 #include <wchar.h>
 #include "mutt/mutt.h"
+#include "curs_lib.h"
 #include "globals.h"
 #include "keymap.h"
-#include "mutt_curses.h"
 #include "mutt_window.h"
+#include "muttlib.h"
 #include "opcodes.h"
-#include "options.h"
 #include "pager.h"
-#include "protos.h"
 
 static const char *HelpStrings[] = {
 #define DEFINE_HELP_MESSAGE(opcode, help_string) help_string,
@@ -44,7 +49,14 @@ static const char *HelpStrings[] = {
       NULL,
 };
 
-static const struct Binding *help_lookup_function(int op, int menu)
+/**
+ * help_lookup_function - Find a keybinding for an operation
+ * @param op   Operation, e.g. OP_DELETE
+ * @param menu Current Menu, e.g. #MENU_PAGER
+ * @retval ptr  Key binding
+ * @retval NULL If none
+ */
+static const struct Binding *help_lookup_function(int op, enum MenuType menu)
 {
   const struct Binding *map = NULL;
 
@@ -53,7 +65,7 @@ static const struct Binding *help_lookup_function(int op, int menu)
     /* first look in the generic map for the function */
     for (int i = 0; OpGeneric[i].name; i++)
       if (OpGeneric[i].op == op)
-        return (&OpGeneric[i]);
+        return &OpGeneric[i];
   }
 
   map = km_get_table(menu);
@@ -61,28 +73,47 @@ static const struct Binding *help_lookup_function(int op, int menu)
   {
     for (int i = 0; map[i].name; i++)
       if (map[i].op == op)
-        return (&map[i]);
+        return &map[i];
   }
 
   return NULL;
 }
 
-void mutt_make_help(char *d, size_t dlen, const char *txt, int menu, int op)
+/**
+ * mutt_make_help - Create one entry for the help bar
+ * @param buf    Buffer for the result
+ * @param buflen Length of buffer
+ * @param txt    Text part, e.g. "delete"
+ * @param menu   Current Menu, e.g. #MENU_PAGER
+ * @param op     Operation, e.g. OP_DELETE
+ *
+ * This will return something like: "d:delete"
+ */
+void mutt_make_help(char *buf, size_t buflen, const char *txt, enum MenuType menu, int op)
 {
-  char buf[SHORT_STRING];
+  char tmp[128];
 
-  if (km_expand_key(buf, sizeof(buf), km_find_func(menu, op)) ||
-      km_expand_key(buf, sizeof(buf), km_find_func(MENU_GENERIC, op)))
+  if (km_expand_key(tmp, sizeof(tmp), km_find_func(menu, op)) ||
+      km_expand_key(tmp, sizeof(tmp), km_find_func(MENU_GENERIC, op)))
   {
-    snprintf(d, dlen, "%s:%s", buf, txt);
+    snprintf(buf, buflen, "%s:%s", tmp, txt);
   }
   else
   {
-    d[0] = '\0';
+    buf[0] = '\0';
   }
 }
 
-char *mutt_compile_help(char *buf, size_t buflen, int menu, const struct Mapping *items)
+/**
+ * mutt_compile_help - Create the text for the help menu
+ * @param buf    Buffer for the result
+ * @param buflen Length of buffer
+ * @param menu   Current Menu, e.g. #MENU_PAGER
+ * @param items  Map of functions to display in the help bar
+ * @retval ptr Buffer containing result
+ */
+char *mutt_compile_help(char *buf, size_t buflen, enum MenuType menu,
+                        const struct Mapping *items)
 {
   char *pbuf = buf;
 
@@ -102,7 +133,16 @@ char *mutt_compile_help(char *buf, size_t buflen, int menu, const struct Mapping
   return buf;
 }
 
-static int print_macro(FILE *f, int maxwidth, const char **macro)
+/**
+ * print_macro - Print a macro string to a file
+ * @param[in]  fp       File to write to
+ * @param[in]  maxwidth Maximum width in screen columns
+ * @param[out] macro    Macro string
+ * @retval num Number of screen columns used
+ *
+ * The `macro` pointer is move past the string we've printed
+ */
+static int print_macro(FILE *fp, int maxwidth, const char **macro)
 {
   int n = maxwidth;
   wchar_t wc;
@@ -114,7 +154,7 @@ static int print_macro(FILE *f, int maxwidth, const char **macro)
   memset(&mbstate2, 0, sizeof(mbstate2));
   for (; len && (k = mbrtowc(&wc, *macro, len, &mbstate1)); *macro += k, len -= k)
   {
-    if (k == (size_t)(-1) || k == (size_t)(-2))
+    if ((k == (size_t)(-1)) || (k == (size_t)(-2)))
     {
       if (k == (size_t)(-1))
         memset(&mbstate1, 0, sizeof(mbstate1));
@@ -123,7 +163,7 @@ static int print_macro(FILE *f, int maxwidth, const char **macro)
     }
     /* glibc-2.1.3's wcwidth() returns 1 for unprintable chars! */
     const int w = wcwidth(wc);
-    if (IsWPrint(wc) && w >= 0)
+    if (IsWPrint(wc) && (w >= 0))
     {
       if (w > n)
         break;
@@ -131,40 +171,48 @@ static int print_macro(FILE *f, int maxwidth, const char **macro)
       {
         char buf[MB_LEN_MAX * 2];
         size_t n1, n2;
-        if ((n1 = wcrtomb(buf, wc, &mbstate2)) != (size_t)(-1) &&
-            (n2 = wcrtomb(buf + n1, 0, &mbstate2)) != (size_t)(-1))
+        if (((n1 = wcrtomb(buf, wc, &mbstate2)) != (size_t)(-1)) &&
+            ((n2 = wcrtomb(buf + n1, 0, &mbstate2)) != (size_t)(-1)))
         {
-          fputs(buf, f);
+          fputs(buf, fp);
         }
       }
     }
-    else if (wc < 0x20 || wc == 0x7f)
+    else if ((wc < 0x20) || (wc == 0x7f))
     {
       if (n < 2)
         break;
       n -= 2;
-      if (wc == '\033')
-        fprintf(f, "\\e");
+      if (wc == '\033') // Escape
+        fprintf(fp, "\\e");
       else if (wc == '\n')
-        fprintf(f, "\\n");
+        fprintf(fp, "\\n");
       else if (wc == '\r')
-        fprintf(f, "\\r");
+        fprintf(fp, "\\r");
       else if (wc == '\t')
-        fprintf(f, "\\t");
+        fprintf(fp, "\\t");
       else
-        fprintf(f, "^%c", (char) ((wc + '@') & 0x7f));
+        fprintf(fp, "^%c", (char) ((wc + '@') & 0x7f));
     }
     else
     {
       if (n < 1)
         break;
       n -= 1;
-      fprintf(f, "?");
+      fprintf(fp, "?");
     }
   }
-  return (maxwidth - n);
+  return maxwidth - n;
 }
 
+/**
+ * get_wrapped_width - Wrap a string at a sensible place
+ * @param t   String to wrap
+ * @param wid Maximum width
+ * @retval num Break after this many characters
+ *
+ * If the string's too long, look for some whitespace to break at.
+ */
 static int get_wrapped_width(const char *t, size_t wid)
 {
   wchar_t wc;
@@ -180,7 +228,7 @@ static int get_wrapped_width(const char *t, size_t wid)
   {
     if (*s == ' ')
       m = n;
-    if (k == (size_t)(-1) || k == (size_t)(-2))
+    if ((k == (size_t)(-1)) || (k == (size_t)(-2)))
     {
       if (k == (size_t)(-1))
         memset(&mbstate, 0, sizeof(mbstate));
@@ -198,67 +246,90 @@ static int get_wrapped_width(const char *t, size_t wid)
   return n;
 }
 
-static int pad(FILE *f, int col, int i)
+/**
+ * pad - Write some padding to a file
+ * @param fp  File to write to
+ * @param col Current screen column
+ * @param i   Screen column to pad until
+ * @retval num `i` - Padding was added
+ * @retval num `col` - Content was already wider than col
+ */
+static int pad(FILE *fp, int col, int i)
 {
   if (col < i)
   {
-    char fmt[32] = "";
+    char fmt[32] = { 0 };
     snprintf(fmt, sizeof(fmt), "%%-%ds", i - col);
-    fprintf(f, fmt, "");
+    fprintf(fp, fmt, "");
     return i;
   }
-  fputc(' ', f);
-  return (col + 1);
+  fputc(' ', fp);
+  return col + 1;
 }
 
-static void format_line(FILE *f, int ismacro, const char *t1, const char *t2, const char *t3)
+/**
+ * format_line - Write a formatted line to a file
+ * @param fp      File to write to
+ * @param ismacro Layout mode, see below
+ * @param t1      Text part 1
+ * @param t2      Text part 2
+ * @param t3      Text part 3
+ *
+ * Assemble the three columns of text.
+ *
+ * `ismacro` can be:
+ * *  1 : Macro with a description
+ * *  0 : Non-macro
+ * * -1 : Macro with no description
+ */
+static void format_line(FILE *fp, int ismacro, const char *t1, const char *t2, const char *t3)
 {
   int col;
   int col_b;
-  bool split;
 
-  fputs(t1, f);
+  fputs(t1, fp);
 
   /* don't try to press string into one line with less than 40 characters. */
-  split = (MuttIndexWindow->cols < 40);
+  bool split = (MuttIndexWindow->cols < 40);
   if (split)
   {
     col = 0;
-    col_b = LONG_STRING;
-    fputc('\n', f);
+    col_b = 1024;
+    fputc('\n', fp);
   }
   else
   {
-    const int col_a = MuttIndexWindow->cols > 83 ? (MuttIndexWindow->cols - 32) >> 2 : 12;
-    col_b = MuttIndexWindow->cols > 49 ? (MuttIndexWindow->cols - 10) >> 1 : 19;
-    col = pad(f, mutt_strwidth(t1), col_a);
+    const int col_a =
+        (MuttIndexWindow->cols > 83) ? (MuttIndexWindow->cols - 32) >> 2 : 12;
+    col_b = (MuttIndexWindow->cols > 49) ? (MuttIndexWindow->cols - 10) >> 1 : 19;
+    col = pad(fp, mutt_strwidth(t1), col_a);
   }
 
   if (ismacro > 0)
   {
-    if (mutt_str_strcmp(Pager, "builtin") == 0)
-      fputs("_\010", f);
-    fputs("M ", f);
+    if (mutt_str_strcmp(C_Pager, "builtin") == 0)
+      fputs("_\010", fp); // Ctrl-H (backspace)
+    fputs("M ", fp);
     col += 2;
 
     if (!split)
     {
-      col += print_macro(f, col_b - col - 4, &t2);
+      col += print_macro(fp, col_b - col - 4, &t2);
       if (mutt_strwidth(t2) > col_b - col)
         t2 = "...";
     }
   }
 
-  col += print_macro(f, col_b - col - 1, &t2);
+  col += print_macro(fp, col_b - col - 1, &t2);
   if (split)
-    fputc('\n', f);
+    fputc('\n', fp);
   else
-    col = pad(f, col, col_b);
+    col = pad(fp, col, col_b);
 
   if (split)
   {
-    print_macro(f, LONG_STRING, &t3);
-    fputc('\n', f);
+    print_macro(fp, 1024, &t3);
+    fputc('\n', fp);
   }
   else
   {
@@ -272,34 +343,39 @@ static void format_line(FILE *f, int ismacro, const char *t1, const char *t2, co
         n = get_wrapped_width(t3, n);
       }
 
-      n = print_macro(f, n, &t3);
+      n = print_macro(fp, n, &t3);
 
       if (*t3)
       {
-        if (mutt_str_strcmp(Pager, "builtin") != 0)
+        if (mutt_str_strcmp(C_Pager, "builtin") != 0)
         {
-          fputc('\n', f);
+          fputc('\n', fp);
           n = 0;
         }
         else
         {
           n += col - MuttIndexWindow->cols;
-          if (Markers)
+          if (C_Markers)
             n++;
         }
-        col = pad(f, n, col_b);
+        col = pad(fp, n, col_b);
       }
     }
   }
 
-  fputc('\n', f);
+  fputc('\n', fp);
 }
 
-static void dump_menu(FILE *f, int menu)
+/**
+ * dump_menu - Write all the key bindings to a file
+ * @param fp   File to write to
+ * @param menu Current Menu, e.g. #MENU_PAGER
+ */
+static void dump_menu(FILE *fp, enum MenuType menu)
 {
   struct Keymap *map = NULL;
   const struct Binding *b = NULL;
-  char buf[SHORT_STRING];
+  char buf[128];
 
   /* browse through the keymap table */
   for (map = Keymaps[menu]; map; map = map->next)
@@ -310,21 +386,27 @@ static void dump_menu(FILE *f, int menu)
 
       if (map->op == OP_MACRO)
       {
-        if (!map->descr)
-          format_line(f, -1, buf, "macro", map->macro);
+        if (map->desc)
+          format_line(fp, 1, buf, map->macro, map->desc);
         else
-          format_line(f, 1, buf, map->macro, map->descr);
+          format_line(fp, -1, buf, "macro", map->macro);
       }
       else
       {
         b = help_lookup_function(map->op, menu);
-        format_line(f, 0, buf, b ? b->name : "UNKNOWN",
+        format_line(fp, 0, buf, b ? b->name : "UNKNOWN",
                     b ? _(HelpStrings[b->op]) : _("ERROR: please report this bug"));
       }
     }
   }
 }
 
+/**
+ * is_bound - Does a function have a keybinding?
+ * @param map Keymap to examine
+ * @param op  Operation, e.g. OP_DELETE
+ * @retval true If a key is bound to that operation
+ */
 static bool is_bound(struct Keymap *map, int op)
 {
   for (; map; map = map->next)
@@ -333,21 +415,32 @@ static bool is_bound(struct Keymap *map, int op)
   return false;
 }
 
-static void dump_unbound(FILE *f, const struct Binding *funcs,
+/**
+ * dump_unbound - Write out all the operations with no key bindings
+ * @param fp    File to write to
+ * @param funcs All the bindings for the current menu
+ * @param map   First key map to consider
+ * @param aux   Second key map to consider
+ */
+static void dump_unbound(FILE *fp, const struct Binding *funcs,
                          struct Keymap *map, struct Keymap *aux)
 {
   for (int i = 0; funcs[i].name; i++)
   {
     if (!is_bound(map, funcs[i].op) && (!aux || !is_bound(aux, funcs[i].op)))
-      format_line(f, 0, funcs[i].name, "", _(HelpStrings[funcs[i].op]));
+      format_line(fp, 0, funcs[i].name, "", _(HelpStrings[funcs[i].op]));
   }
 }
 
-void mutt_help(int menu)
+/**
+ * mutt_help - Display the help menu
+ * @param menu Current Menu
+ */
+void mutt_help(enum MenuType menu)
 {
   char t[PATH_MAX];
-  char buf[SHORT_STRING];
-  FILE *f = NULL;
+  char buf[128];
+  FILE *fp = NULL;
 
   mutt_mktemp(t, sizeof(t));
 
@@ -358,27 +451,27 @@ void mutt_help(int menu)
 
   do
   {
-    f = mutt_file_fopen(t, "w");
-    if (!f)
+    fp = mutt_file_fopen(t, "w");
+    if (!fp)
     {
       mutt_perror(t);
       return;
     }
 
-    dump_menu(f, menu);
-    if (menu != MENU_EDITOR && menu != MENU_PAGER)
+    dump_menu(fp, menu);
+    if ((menu != MENU_EDITOR) && (menu != MENU_PAGER))
     {
-      fprintf(f, "\n%s\n\n", _("Generic bindings:"));
-      dump_menu(f, MENU_GENERIC);
+      fprintf(fp, "\n%s\n\n", _("Generic bindings:"));
+      dump_menu(fp, MENU_GENERIC);
     }
 
-    fprintf(f, "\n%s\n\n", _("Unbound functions:"));
+    fprintf(fp, "\n%s\n\n", _("Unbound functions:"));
     if (funcs)
-      dump_unbound(f, funcs, Keymaps[menu], NULL);
+      dump_unbound(fp, funcs, Keymaps[menu], NULL);
     if (menu != MENU_PAGER)
-      dump_unbound(f, OpGeneric, Keymaps[MENU_GENERIC], Keymaps[menu]);
+      dump_unbound(fp, OpGeneric, Keymaps[MENU_GENERIC], Keymaps[menu]);
 
-    mutt_file_fclose(&f);
+    mutt_file_fclose(&fp);
 
     snprintf(buf, sizeof(buf), _("Help for %s"), desc);
   } while (mutt_do_pager(buf, t, MUTT_PAGER_RETWINCH | MUTT_PAGER_MARKER | MUTT_PAGER_NSKIP | MUTT_PAGER_NOWRAP,

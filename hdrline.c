@@ -6,6 +6,7 @@
  * Copyright (C) 1996-2000,2002,2007 Michael R. Elkins <me@mutt.org>
  * Copyright (C) 2016 Richard Russon <rich@flatcap.org>
  * Copyright (C) 2016 Ian Zimmerman <itz@primate.net>
+ * Copyright (C) 2019 Pietro Cerutti <gahr@gahr.ch>
  *
  * @copyright
  * This program is free software: you can redistribute it and/or modify it under
@@ -22,6 +23,12 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @page hdrline String processing routines to generate the mail index
+ *
+ * String processing routines to generate the mail index
+ */
+
 #include "config.h"
 #include <locale.h>
 #include <stdbool.h>
@@ -30,61 +37,92 @@
 #include <string.h>
 #include <time.h>
 #include "mutt/mutt.h"
-#include "mutt.h"
-#include "body.h"
+#include "address/lib.h"
+#include "config/lib.h"
+#include "email/lib.h"
+#include "core/lib.h"
+#include "hdrline.h"
+#include "alias.h"
 #include "context.h"
-#include "envelope.h"
+#include "curs_lib.h"
 #include "format_flags.h"
 #include "globals.h"
-#include "header.h"
-#include "mbtable.h"
+#include "hook.h"
 #include "mutt_curses.h"
+#include "mutt_menu.h"
+#include "mutt_parse.h"
+#include "mutt_thread.h"
 #include "mutt_window.h"
+#include "muttlib.h"
 #include "ncrypt/ncrypt.h"
-#include "options.h"
-#include "protos.h"
 #include "sort.h"
-#include "tags.h"
-#include "thread.h"
+
+/* These Config Variables are only used in hdrline.c */
+struct MbTable *C_CryptChars; ///< Config: User-configurable crypto flags: signed, encrypted etc.
+struct MbTable *C_FlagChars; ///< Config: User-configurable index flags: tagged, new, etc
+struct MbTable *C_FromChars; ///< Config: User-configurable index flags: to address, cc address, etc
+struct MbTable *C_ToChars; ///< Config: Indicator characters for the 'To' field in the index
 
 /**
- * enum FlagChars - Index into the FlagChars variable ($flag_chars)
+ * enum FlagChars - Index into the #C_FlagChars variable ($flag_chars)
  */
 enum FlagChars
 {
-  FlagCharTagged,
-  FlagCharImportant,
-  FlagCharDeleted,
-  FlagCharDeletedAttach,
-  FlagCharReplied,
-  FlagCharOld,
-  FlagCharNew,
-  FlagCharOldThread,
-  FlagCharNewThread,
-  FlagCharSEmpty,
-  FlagCharZEmpty
+  FLAG_CHAR_TAGGED,         ///< Character denoting a tagged email
+  FLAG_CHAR_IMPORTANT,      ///< Character denoting a important (flagged) email
+  FLAG_CHAR_DELETED,        ///< Character denoting a deleted email
+  FLAG_CHAR_DELETED_ATTACH, ///< Character denoting a deleted attachment
+  FLAG_CHAR_REPLIED, ///< Character denoting an email that has been replied to
+  FLAG_CHAR_OLD,     ///< Character denoting an email that has been read
+  FLAG_CHAR_NEW,     ///< Character denoting an unread email
+  FLAG_CHAR_OLD_THREAD, ///< Character denoting a thread of emails that has been read
+  FLAG_CHAR_NEW_THREAD, ///< Character denoting a thread containing at least one new email
+  FLAG_CHAR_SEMPTY, ///< Character denoting a read email, $index_format %S expando
+  FLAG_CHAR_ZEMPTY, ///< Character denoting a read email, $index_format %Z expando
 };
 
-bool mutt_is_mail_list(struct Address *addr)
+/**
+ * enum CryptChars - Index into the #C_CryptChars variable ($crypt_chars)
+ */
+enum CryptChars
 {
-  if (!mutt_regexlist_match(UnMailLists, addr->mailbox))
-    return mutt_regexlist_match(MailLists, addr->mailbox);
+  FLAG_CHAR_CRYPT_GOOD_SIGN, ///< Character denoting a message signed with a verified key
+  FLAG_CHAR_CRYPT_ENCRYPTED, ///< Character denoting a message is PGP-encrypted
+  FLAG_CHAR_CRYPT_SIGNED,    ///< Character denoting a message is signed
+  FLAG_CHAR_CRYPT_CONTAINS_KEY, ///< Character denoting a message contains a PGP key
+  FLAG_CHAR_CRYPT_NO_CRYPTO, ///< Character denoting a message has no cryptography information
+};
+
+/**
+ * mutt_is_mail_list - Is this the email address of a mailing list?
+ * @param addr Address to test
+ * @retval true If it's a mailing list
+ */
+bool mutt_is_mail_list(const struct Address *addr)
+{
+  if (!mutt_regexlist_match(&UnMailLists, addr->mailbox))
+    return mutt_regexlist_match(&MailLists, addr->mailbox);
   return false;
 }
 
-bool mutt_is_subscribed_list(struct Address *addr)
+/**
+ * mutt_is_subscribed_list - Is this the email address of a user-subscribed mailing list?
+ * @param addr Address to test
+ * @retval true If it's a subscribed mailing list
+ */
+bool mutt_is_subscribed_list(const struct Address *addr)
 {
-  if (!mutt_regexlist_match(UnMailLists, addr->mailbox) &&
-      !mutt_regexlist_match(UnSubscribedLists, addr->mailbox))
+  if (!mutt_regexlist_match(&UnMailLists, addr->mailbox) &&
+      !mutt_regexlist_match(&UnSubscribedLists, addr->mailbox))
   {
-    return mutt_regexlist_match(SubscribedLists, addr->mailbox);
+    return mutt_regexlist_match(&SubscribedLists, addr->mailbox);
   }
   return false;
 }
 
 /**
  * check_for_mailing_list - Search list of addresses for a mailing list
- * @param addr    List of addreses to search
+ * @param al      AddressList to search
  * @param pfx     Prefix string
  * @param buf     Buffer to store results
  * @param buflen  Buffer length
@@ -94,14 +132,16 @@ bool mutt_is_subscribed_list(struct Address *addr)
  * Search for a mailing list in the list of addresses pointed to by addr.
  * If one is found, print pfx and the name of the list into buf.
  */
-static bool check_for_mailing_list(struct Address *addr, const char *pfx, char *buf, int buflen)
+static bool check_for_mailing_list(struct AddressList *al, const char *pfx,
+                                   char *buf, int buflen)
 {
-  for (; addr; addr = addr->next)
+  struct Address *a = NULL;
+  TAILQ_FOREACH(a, al, entries)
   {
-    if (mutt_is_subscribed_list(addr))
+    if (mutt_is_subscribed_list(a))
     {
       if (pfx && buf && buflen)
-        snprintf(buf, buflen, "%s%s", pfx, mutt_get_name(addr));
+        snprintf(buf, buflen, "%s%s", pfx, mutt_get_name(a));
       return true;
     }
   }
@@ -110,27 +150,39 @@ static bool check_for_mailing_list(struct Address *addr, const char *pfx, char *
 
 /**
  * check_for_mailing_list_addr - Check an address list for a mailing list
+ * @param al     AddressList
+ * @param buf    Buffer for the result
+ * @param buflen Length of buffer
+ * @retval true Mailing list found
  *
- * If one is found, print the address of the list into buf, then return 1.
- * Otherwise, simply return 0.
+ * If one is found, print the address of the list into buf.
  */
-static bool check_for_mailing_list_addr(struct Address *addr, char *buf, int buflen)
+static bool check_for_mailing_list_addr(struct AddressList *al, char *buf, int buflen)
 {
-  for (; addr; addr = addr->next)
+  struct Address *a = NULL;
+  TAILQ_FOREACH(a, al, entries)
   {
-    if (mutt_is_subscribed_list(addr))
+    if (mutt_is_subscribed_list(a))
     {
       if (buf && buflen)
-        snprintf(buf, buflen, "%s", addr->mailbox);
+        snprintf(buf, buflen, "%s", a->mailbox);
       return true;
     }
   }
   return false;
 }
 
-static bool first_mailing_list(char *buf, size_t buflen, struct Address *a)
+/**
+ * first_mailing_list - Get the first mailing list in the list of addresses
+ * @param buf    Buffer for the result
+ * @param buflen Length of buffer
+ * @param al     AddressList
+ * @retval true If a mailing list was found
+ */
+static bool first_mailing_list(char *buf, size_t buflen, struct AddressList *al)
 {
-  for (; a; a = a->next)
+  struct Address *a = NULL;
+  TAILQ_FOREACH(a, al, entries)
   {
     if (mutt_is_subscribed_list(a))
     {
@@ -145,13 +197,13 @@ static bool first_mailing_list(char *buf, size_t buflen, struct Address *a)
  * add_index_color - Insert a color marker into a string
  * @param buf    Buffer to store marker
  * @param buflen Buffer length
- * @param flags  Flags, e.g. MUTT_FORMAT_INDEX
- * @param color  Color, e.g. MT_COLOR_MESSAGE
+ * @param flags  Flags, see #MuttFormatFlags
+ * @param color  Color, e.g. #MT_COLOR_MESSAGE
  * @retval num Characters written
  *
  * The colors are stored as "magic" strings embedded in the text.
  */
-static size_t add_index_color(char *buf, size_t buflen, enum FormatFlag flags, char color)
+static size_t add_index_color(char *buf, size_t buflen, MuttFormatFlags flags, char color)
 {
   /* only add color markers if we are operating on main index entries. */
   if (!(flags & MUTT_FORMAT_INDEX))
@@ -180,14 +232,17 @@ static size_t add_index_color(char *buf, size_t buflen, enum FormatFlag flags, c
 
 /**
  * enum FieldType - Header types
+ *
+ * Strings for printing headers
  */
 enum FieldType
 {
-  DISP_TO,
-  DISP_CC,
-  DISP_BCC,
-  DISP_FROM,
-  DISP_NUM
+  DISP_TO,    ///< To: string
+  DISP_CC,    ///< Cc: string
+  DISP_BCC,   ///< Bcc: string
+  DISP_FROM,  ///< From: string
+  DISP_PLAIN, ///< Empty string
+  DISP_MAX,
 };
 
 /**
@@ -200,7 +255,7 @@ enum FieldType
  * If the index is invalid, then a space character will be returned.
  * If the character selected is '\n' (Ctrl-M), then "" will be returned.
  */
-static char *get_nth_wchar(struct MbTable *table, int index)
+static const char *get_nth_wchar(struct MbTable *table, int index)
 {
   if (!table || !table->chars || (index < 0) || (index >= table->len))
     return " ";
@@ -223,17 +278,15 @@ static const char *make_from_prefix(enum FieldType disp)
 {
   /* need 2 bytes at the end, one for the space, another for NUL */
   static char padded[8];
-  static const char *long_prefixes[DISP_NUM] = {
-    [DISP_TO] = "To ",
-    [DISP_CC] = "Cc ",
-    [DISP_BCC] = "Bcc ",
-    [DISP_FROM] = "",
+  static const char *long_prefixes[DISP_MAX] = {
+    [DISP_TO] = "To ", [DISP_CC] = "Cc ", [DISP_BCC] = "Bcc ",
+    [DISP_FROM] = "",  [DISP_PLAIN] = "",
   };
 
-  if (!FromChars || !FromChars->chars || (FromChars->len == 0))
+  if (!C_FromChars || !C_FromChars->chars || (C_FromChars->len == 0))
     return long_prefixes[disp];
 
-  char *pchar = get_nth_wchar(FromChars, disp);
+  const char *pchar = get_nth_wchar(C_FromChars, disp);
   if (mutt_str_strlen(pchar) == 0)
     return "";
 
@@ -245,8 +298,9 @@ static const char *make_from_prefix(enum FieldType disp)
  * make_from - Generate a From: field (with optional prefix)
  * @param env      Envelope of the email
  * @param buf      Buffer to store the result
- * @param len      Size of the buffer
+ * @param buflen   Size of the buffer
  * @param do_lists Should we check for mailing lists?
+ * @param flags    Format flags, see #MuttFormatFlags
  *
  * Generate the %F or %L field in $index_format.
  * This is the author, or recipient of the email.
@@ -254,44 +308,45 @@ static const char *make_from_prefix(enum FieldType disp)
  * The field can optionally be prefixed by a character from $from_chars.
  * If $from_chars is not set, the prefix will be, "To", "Cc", etc
  */
-static void make_from(struct Envelope *env, char *buf, size_t len, int do_lists)
+static void make_from(struct Envelope *env, char *buf, size_t buflen,
+                      bool do_lists, MuttFormatFlags flags)
 {
   if (!env || !buf)
     return;
 
   bool me;
   enum FieldType disp;
-  struct Address *name = NULL;
+  struct AddressList *name = NULL;
 
-  me = mutt_addr_is_user(env->from);
+  me = mutt_addr_is_user(TAILQ_FIRST(&env->from));
 
   if (do_lists || me)
   {
-    if (check_for_mailing_list(env->to, make_from_prefix(DISP_TO), buf, len))
+    if (check_for_mailing_list(&env->to, make_from_prefix(DISP_TO), buf, buflen))
       return;
-    if (check_for_mailing_list(env->cc, make_from_prefix(DISP_CC), buf, len))
+    if (check_for_mailing_list(&env->cc, make_from_prefix(DISP_CC), buf, buflen))
       return;
   }
 
-  if (me && env->to)
+  if (me && !TAILQ_EMPTY(&env->to))
   {
-    disp = DISP_TO;
-    name = env->to;
+    disp = (flags & MUTT_FORMAT_PLAIN) ? DISP_PLAIN : DISP_TO;
+    name = &env->to;
   }
-  else if (me && env->cc)
+  else if (me && !TAILQ_EMPTY(&env->cc))
   {
     disp = DISP_CC;
-    name = env->cc;
+    name = &env->cc;
   }
-  else if (me && env->bcc)
+  else if (me && !TAILQ_EMPTY(&env->bcc))
   {
     disp = DISP_BCC;
-    name = env->bcc;
+    name = &env->bcc;
   }
-  else if (env->from)
+  else if (!TAILQ_EMPTY(&env->from))
   {
     disp = DISP_FROM;
-    name = env->from;
+    name = &env->from;
   }
   else
   {
@@ -299,148 +354,170 @@ static void make_from(struct Envelope *env, char *buf, size_t len, int do_lists)
     return;
   }
 
-  snprintf(buf, len, "%s%s", make_from_prefix(disp), mutt_get_name(name));
+  snprintf(buf, buflen, "%s%s", make_from_prefix(disp), mutt_get_name(TAILQ_FIRST(name)));
 }
 
-static void make_from_addr(struct Envelope *hdr, char *buf, size_t len, int do_lists)
+/**
+ * make_from_addr - Create a 'from' address for a reply email
+ * @param env      Envelope of current email
+ * @param buf      Buffer for the result
+ * @param buflen   Length of buffer
+ * @param do_lists If true, check for mailing lists
+ */
+static void make_from_addr(struct Envelope *env, char *buf, size_t buflen, bool do_lists)
 {
-  if (!hdr || !buf)
+  if (!env || !buf)
     return;
 
-  bool me = mutt_addr_is_user(hdr->from);
+  bool me = mutt_addr_is_user(TAILQ_FIRST(&env->from));
 
   if (do_lists || me)
   {
-    if (check_for_mailing_list_addr(hdr->to, buf, len))
+    if (check_for_mailing_list_addr(&env->to, buf, buflen))
       return;
-    if (check_for_mailing_list_addr(hdr->cc, buf, len))
+    if (check_for_mailing_list_addr(&env->cc, buf, buflen))
       return;
   }
 
-  if (me && hdr->to)
-    snprintf(buf, len, "%s", hdr->to->mailbox);
-  else if (me && hdr->cc)
-    snprintf(buf, len, "%s", hdr->cc->mailbox);
-  else if (hdr->from)
-    mutt_str_strfcpy(buf, hdr->from->mailbox, len);
+  if (me && !TAILQ_EMPTY(&env->to))
+    snprintf(buf, buflen, "%s", TAILQ_FIRST(&env->to)->mailbox);
+  else if (me && !TAILQ_EMPTY(&env->cc))
+    snprintf(buf, buflen, "%s", TAILQ_FIRST(&env->cc)->mailbox);
+  else if (!TAILQ_EMPTY(&env->from))
+    mutt_str_strfcpy(buf, TAILQ_FIRST(&env->from)->mailbox, buflen);
   else
-    *buf = 0;
+    *buf = '\0';
 }
 
-static bool user_in_addr(struct Address *a)
+/**
+ * user_in_addr - Do any of the addresses refer to the user?
+ * @param al AddressList
+ * @retval true If any of the addresses match one of the user's addresses
+ */
+static bool user_in_addr(struct AddressList *al)
 {
-  for (; a; a = a->next)
-    if (mutt_addr_is_user(a))
-      return true;
+  struct Address *a = NULL;
+  TAILQ_FOREACH(a, al, entries)
+  if (mutt_addr_is_user(a))
+    return true;
   return false;
 }
 
 /**
  * user_is_recipient - Is the user a recipient of the message
+ * @param e Email to test
  * @retval 0 User is not in list
  * @retval 1 User is unique recipient
  * @retval 2 User is in the TO list
  * @retval 3 User is in the CC list
  * @retval 4 User is originator
  * @retval 5 Sent to a subscribed mailinglist
+ * @retval 6 User is in the Reply-To list
  */
-static int user_is_recipient(struct Header *h)
+static int user_is_recipient(struct Email *e)
 {
-  if (!h || !h->env)
+  if (!e || !e->env)
     return 0;
 
-  struct Envelope *env = h->env;
+  struct Envelope *env = e->env;
 
-  if (!h->recip_valid)
+  if (!e->recip_valid)
   {
-    h->recip_valid = true;
+    e->recip_valid = true;
 
-    if (mutt_addr_is_user(env->from))
-      h->recipient = 4;
-    else if (user_in_addr(env->to))
+    if (mutt_addr_is_user(TAILQ_FIRST(&env->from)))
+      e->recipient = 4;
+    else if (user_in_addr(&env->to))
     {
-      if (env->to->next || env->cc)
-        h->recipient = 2; /* non-unique recipient */
+      if (TAILQ_NEXT(TAILQ_FIRST(&env->to), entries) || !TAILQ_EMPTY(&env->cc))
+        e->recipient = 2; /* non-unique recipient */
       else
-        h->recipient = 1; /* unique recipient */
+        e->recipient = 1; /* unique recipient */
     }
-    else if (user_in_addr(env->cc))
-      h->recipient = 3;
-    else if (check_for_mailing_list(env->to, NULL, NULL, 0))
-      h->recipient = 5;
-    else if (check_for_mailing_list(env->cc, NULL, NULL, 0))
-      h->recipient = 5;
+    else if (user_in_addr(&env->cc))
+      e->recipient = 3;
+    else if (check_for_mailing_list(&env->to, NULL, NULL, 0))
+      e->recipient = 5;
+    else if (check_for_mailing_list(&env->cc, NULL, NULL, 0))
+      e->recipient = 5;
+    else if (user_in_addr(&env->reply_to))
+      e->recipient = 6;
     else
-      h->recipient = 0;
+      e->recipient = 0;
   }
 
-  return h->recipient;
+  return e->recipient;
 }
 
+/**
+ * apply_subject_mods - Apply regex modifications to the subject
+ * @param env Envelope of email
+ * @retval ptr  Modified subject
+ * @retval NULL No modification made
+ */
 static char *apply_subject_mods(struct Envelope *env)
 {
   if (!env)
     return NULL;
 
-  if (!SubjectRegexList)
+  if (STAILQ_EMPTY(&SubjectRegexList))
     return env->subject;
 
-  if (env->subject == NULL || *env->subject == '\0')
+  if (!env->subject || (*env->subject == '\0'))
   {
     env->disp_subj = NULL;
     return NULL;
   }
 
-  env->disp_subj = mutt_replacelist_apply(SubjectRegexList, NULL, 0, env->subject);
+  env->disp_subj = mutt_replacelist_apply(&SubjectRegexList, NULL, 0, env->subject);
   return env->disp_subj;
 }
 
-static bool thread_is_new(struct Context *ctx, struct Header *hdr)
+/**
+ * thread_is_new - Does the email thread contain any new emails?
+ * @param ctx Mailbox
+ * @param e Email
+ * @retval true If thread contains new mail
+ */
+static bool thread_is_new(struct Context *ctx, struct Email *e)
 {
-  return (hdr->collapsed && (hdr->num_hidden > 1) &&
-          (mutt_thread_contains_unread(ctx, hdr) == 1));
-}
-
-static bool thread_is_old(struct Context *ctx, struct Header *hdr)
-{
-  return (hdr->collapsed && (hdr->num_hidden > 1) &&
-          (mutt_thread_contains_unread(ctx, hdr) == 2));
+  return e->collapsed && (e->num_hidden > 1) &&
+         (mutt_thread_contains_unread(ctx, e) == 1);
 }
 
 /**
- * index_format_str - Format a string for the index list
- * @param[out] buf      Buffer in which to save string
- * @param[in]  buflen   Buffer length
- * @param[in]  col      Starting column
- * @param[in]  cols     Number of screen columns
- * @param[in]  op       printf-like operator, e.g. 't'
- * @param[in]  src      printf-like format string
- * @param[in]  prec     Field precision, e.g. "-3.4"
- * @param[in]  if_str   If condition is met, display this string
- * @param[in]  else_str Otherwise, display this string
- * @param[in]  data     Pointer to the mailbox Context
- * @param[in]  flags    Format flags
- * @retval src (unchanged)
- *
- * index_format_str() is a callback function for mutt_expando_format().
+ * thread_is_old - Does the email thread contain any unread emails?
+ * @param ctx Mailbox
+ * @param e Email
+ * @retval true If thread contains unread mail
+ */
+static bool thread_is_old(struct Context *ctx, struct Email *e)
+{
+  return e->collapsed && (e->num_hidden > 1) &&
+         (mutt_thread_contains_unread(ctx, e) == 2);
+}
+
+/**
+ * index_format_str - Format a string for the index list - Implements ::format_t
  *
  * | Expando | Description
  * |:--------|:-----------------------------------------------------------------
+ * | \%(fmt) | Date/time when the message was received
  * | \%a     | Address of the author
  * | \%A     | Reply-to address (if present; otherwise: address of author)
  * | \%b     | Filename of the original message folder (think mailbox)
- * | \%B     | The list to which the letter was sent, or else the folder name (%b).
+ * | \%B     | The list to which the letter was sent, or else the folder name (%b)
  * | \%C     | Current message number
  * | \%c     | Number of characters (bytes) in the message
- * | \%D     | Date and time of message using $date_format and local timezone
- * | \%d     | Date and time of message using $date_format and sender's timezone
+ * | \%D     | Date and time of message using `$date_format` and local timezone
+ * | \%d     | Date and time of message using `$date_format` and sender's timezone
  * | \%e     | Current message number in thread
  * | \%E     | Number of messages in current thread
+ * | \%Fp    | Like %F, but plain. No contextual formatting is applied to recipient name
  * | \%F     | Author name, or recipient name if the message is from you
  * | \%f     | Sender (address + real name), either From: or Return-Path:
- * | \%g     | Newsgroup name (if compiled with NNTP support)
- * | \%g     | Message tags (e.g. notmuch tags/imap flags)
  * | \%Gx    | Individual message tag (e.g. notmuch tags/imap flags)
+ * | \%g     | Message tags (e.g. notmuch tags/imap flags)
  * | \%H     | Spam attribute(s) of this message
  * | \%I     | Initials of author
  * | \%i     | Message-id of the current message
@@ -450,8 +527,8 @@ static bool thread_is_old(struct Context *ctx, struct Header *hdr)
  * | \%l     | Number of lines in the message
  * | \%M     | Number of hidden messages if the thread is collapsed
  * | \%m     | Total number of message in the mailbox
- * | \%N     | Message score
  * | \%n     | Author's real name (or address if missing)
+ * | \%N     | Message score
  * | \%O     | Like %L, except using address instead of name
  * | \%P     | Progress indicator for the built-in pager (how much of the file has been displayed)
  * | \%q     | Newsgroup name (if compiled with NNTP support)
@@ -459,61 +536,66 @@ static bool thread_is_old(struct Context *ctx, struct Header *hdr)
  * | \%r     | Comma separated list of To: recipients
  * | \%S     | Single character status of the message (N/O/D/d/!/r/-)
  * | \%s     | Subject of the message
- * | \%T     | The appropriate character from the $$to_chars string
  * | \%t     | 'To:' field (recipients)
+ * | \%T     | The appropriate character from the `$to_chars` string
  * | \%u     | User (login) name of the author
  * | \%v     | First name of the author, or the recipient if the message is from you
  * | \%W     | Name of organization of author ('Organization:' field)
  * | \%x     | 'X-Comment-To:' field (if present and compiled with NNTP support)
  * | \%X     | Number of MIME attachments
- * | \%Y     | 'X-Label:' field (if present, tree unfolded, and != parent's x-label)
  * | \%y     | 'X-Label:' field (if present)
- * | \%Z     | Combined message flags
+ * | \%Y     | 'X-Label:' field (if present, tree unfolded, and != parent's x-label)
  * | \%zc    | Message crypto flags
  * | \%zs    | Message status flags
  * | \%zt    | Message tag flags
- * | \%(fmt) | Date/time when the message was received
+ * | \%Z     | Combined message flags
  * | \%[fmt] | Message date/time converted to the local time zone
  * | \%{fmt} | Message date/time converted to sender's time zone
  */
 static const char *index_format_str(char *buf, size_t buflen, size_t col, int cols,
                                     char op, const char *src, const char *prec,
                                     const char *if_str, const char *else_str,
-                                    unsigned long data, enum FormatFlag flags)
+                                    unsigned long data, MuttFormatFlags flags)
 {
   struct HdrFormatInfo *hfi = (struct HdrFormatInfo *) data;
-  char fmt[SHORT_STRING], tmp[LONG_STRING], *p, *tags = NULL;
-  char *wch = NULL;
-  int i;
-  int optional = (flags & MUTT_FORMAT_OPTIONAL);
-  int threads = ((Sort & SORT_MASK) == SORT_THREADS);
+  char fmt[128], tmp[1024];
+  char *p = NULL, *tags = NULL;
+  bool optional = (flags & MUTT_FORMAT_OPTIONAL);
+  int threads = ((C_Sort & SORT_MASK) == SORT_THREADS);
   int is_index = (flags & MUTT_FORMAT_INDEX);
   size_t colorlen;
 
-  struct Header *hdr = hfi->hdr;
+  struct Email *e = hfi->email;
   struct Context *ctx = hfi->ctx;
+  struct Mailbox *m = hfi->mailbox;
 
-  if (!hdr || !hdr->env)
+  if (!e || !e->env)
     return src;
-  buf[0] = 0;
+
+  const struct Address *reply_to = TAILQ_FIRST(&e->env->reply_to);
+  const struct Address *from = TAILQ_FIRST(&e->env->from);
+  const struct Address *to = TAILQ_FIRST(&e->env->to);
+  const struct Address *cc = TAILQ_FIRST(&e->env->cc);
+
+  buf[0] = '\0';
   switch (op)
   {
     case 'A':
     case 'I':
       if (op == 'A')
       {
-        if (hdr->env->reply_to && hdr->env->reply_to->mailbox)
+        if (reply_to && reply_to->mailbox)
         {
           colorlen = add_index_color(buf, buflen, flags, MT_COLOR_INDEX_AUTHOR);
           mutt_format_s(buf + colorlen, buflen - colorlen, prec,
-                        mutt_addr_for_display(hdr->env->reply_to));
+                        mutt_addr_for_display(reply_to));
           add_index_color(buf + colorlen, buflen - colorlen, flags, MT_COLOR_INDEX);
           break;
         }
       }
       else
       {
-        if (mutt_mb_get_initials(mutt_get_name(hdr->env->from), tmp, sizeof(tmp)))
+        if (mutt_mb_get_initials(mutt_get_name(from), tmp, sizeof(tmp)))
         {
           colorlen = add_index_color(buf, buflen, flags, MT_COLOR_INDEX_AUTHOR);
           mutt_format_s(buf + colorlen, buflen - colorlen, prec, tmp);
@@ -525,10 +607,9 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
 
     case 'a':
       colorlen = add_index_color(buf, buflen, flags, MT_COLOR_INDEX_AUTHOR);
-      if (hdr->env->from && hdr->env->from->mailbox)
+      if (from && from->mailbox)
       {
-        mutt_format_s(buf + colorlen, buflen - colorlen, prec,
-                      mutt_addr_for_display(hdr->env->from));
+        mutt_format_s(buf + colorlen, buflen - colorlen, prec, mutt_addr_for_display(from));
       }
       else
         mutt_format_s(buf + colorlen, buflen - colorlen, prec, "");
@@ -537,12 +618,12 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
 
     case 'B':
     case 'K':
-      if (!first_mailing_list(buf, buflen, hdr->env->to) &&
-          !first_mailing_list(buf, buflen, hdr->env->cc))
+      if (!first_mailing_list(buf, buflen, &e->env->to) &&
+          !first_mailing_list(buf, buflen, &e->env->cc))
       {
-        buf[0] = 0;
+        buf[0] = '\0';
       }
-      if (buf[0])
+      if (buf[0] != '\0')
       {
         mutt_str_strfcpy(tmp, buf, sizeof(tmp));
         mutt_format_s(buf, buflen, prec, tmp);
@@ -551,7 +632,7 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
       if (op == 'K')
       {
         if (optional)
-          optional = 0;
+          optional = false;
         /* break if 'K' returns nothing */
         break;
       }
@@ -559,13 +640,13 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
       /* fallthrough */
 
     case 'b':
-      if (ctx)
+      if (m)
       {
-        p = strrchr(ctx->path, '/');
+        p = strrchr(mailbox_path(m), '/');
         if (p)
           mutt_str_strfcpy(buf, p + 1, buflen);
         else
-          mutt_str_strfcpy(buf, ctx->path, buflen);
+          mutt_str_strfcpy(buf, mailbox_path(m), buflen);
       }
       else
         mutt_str_strfcpy(buf, "(null)", buflen);
@@ -575,7 +656,7 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
 
     case 'c':
       colorlen = add_index_color(buf, buflen, flags, MT_COLOR_INDEX_SIZE);
-      mutt_str_pretty_size(tmp, sizeof(tmp), (long) hdr->content->length);
+      mutt_str_pretty_size(tmp, sizeof(tmp), email_size(e));
       mutt_format_s(buf + colorlen, buflen - colorlen, prec, tmp);
       add_index_color(buf + colorlen, buflen - colorlen, flags, MT_COLOR_INDEX);
       break;
@@ -584,7 +665,7 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
       colorlen = add_index_color(fmt, sizeof(fmt), flags, MT_COLOR_INDEX_NUMBER);
       snprintf(fmt + colorlen, sizeof(fmt) - colorlen, "%%%sd", prec);
       add_index_color(fmt + colorlen, sizeof(fmt) - colorlen, flags, MT_COLOR_INDEX);
-      snprintf(buf, buflen, fmt, hdr->msgno + 1);
+      snprintf(buf, buflen, fmt, e->msgno + 1);
       break;
 
     case 'd':
@@ -596,22 +677,20 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
       /* preprocess $date_format to handle %Z */
       {
         const char *cp = NULL;
-        struct tm *tm = NULL;
-        time_t T;
+        time_t now;
         int j = 0;
 
         if (optional && ((op == '[') || (op == '(')))
         {
-          char *is = NULL;
-          T = time(NULL);
-          tm = localtime(&T);
-          T -= (op == '(') ? hdr->received : hdr->date_sent;
+          now = mutt_date_epoch();
+          struct tm tm = mutt_date_localtime(now);
+          now -= (op == '(') ? e->received : e->date_sent;
 
-          is = (char *) prec;
-          int invert = 0;
+          char *is = (char *) prec;
+          bool invert = false;
           if (*is == '>')
           {
-            invert = 1;
+            invert = true;
             is++;
           }
 
@@ -627,8 +706,8 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
                   t--;
                   t *= (60 * 60 * 24 * 365);
                 }
-                t += ((tm->tm_mon * 60 * 60 * 24 * 30) + (tm->tm_mday * 60 * 60 * 24) +
-                      (tm->tm_hour * 60 * 60) + (tm->tm_min * 60) + tm->tm_sec);
+                t += ((tm.tm_mon * 60 * 60 * 24 * 30) + (tm.tm_mday * 60 * 60 * 24) +
+                      (tm.tm_hour * 60 * 60) + (tm.tm_min * 60) + tm.tm_sec);
                 break;
 
               case 'm':
@@ -637,8 +716,8 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
                   t--;
                   t *= (60 * 60 * 24 * 30);
                 }
-                t += ((tm->tm_mday * 60 * 60 * 24) + (tm->tm_hour * 60 * 60) +
-                      (tm->tm_min * 60) + tm->tm_sec);
+                t += ((tm.tm_mday * 60 * 60 * 24) + (tm.tm_hour * 60 * 60) +
+                      (tm.tm_min * 60) + tm.tm_sec);
                 break;
 
               case 'w':
@@ -647,8 +726,8 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
                   t--;
                   t *= (60 * 60 * 24 * 7);
                 }
-                t += ((tm->tm_wday * 60 * 60 * 24) + (tm->tm_hour * 60 * 60) +
-                      (tm->tm_min * 60) + tm->tm_sec);
+                t += ((tm.tm_wday * 60 * 60 * 24) + (tm.tm_hour * 60 * 60) +
+                      (tm.tm_min * 60) + tm.tm_sec);
                 break;
 
               case 'd':
@@ -657,7 +736,7 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
                   t--;
                   t *= (60 * 60 * 24);
                 }
-                t += ((tm->tm_hour * 60 * 60) + (tm->tm_min * 60) + tm->tm_sec);
+                t += ((tm.tm_hour * 60 * 60) + (tm.tm_min * 60) + tm.tm_sec);
                 break;
 
               case 'H':
@@ -666,7 +745,7 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
                   t--;
                   t *= (60 * 60);
                 }
-                t += ((tm->tm_min * 60) + tm->tm_sec);
+                t += ((tm.tm_min * 60) + tm.tm_sec);
                 break;
 
               case 'M':
@@ -675,7 +754,7 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
                   t--;
                   t *= (60);
                 }
-                t += (tm->tm_sec);
+                t += (tm.tm_sec);
                 break;
 
               default:
@@ -687,37 +766,37 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
           if (j < 0)
             j *= -1;
 
-          if (((T > j) || (T < (-1 * j))) ^ invert)
-            optional = 0;
+          if (((now > j) || (now < (-1 * j))) ^ invert)
+            optional = false;
           break;
         }
 
         p = buf;
 
-        cp = (op == 'd' || op == 'D') ? (NONULL(DateFormat)) : src;
-        int do_locales;
+        cp = ((op == 'd') || (op == 'D')) ? (NONULL(C_DateFormat)) : src;
+        bool do_locales;
         if (*cp == '!')
         {
-          do_locales = 0;
+          do_locales = false;
           cp++;
         }
         else
-          do_locales = 1;
+          do_locales = true;
 
         size_t len = buflen - 1;
-        while (len > 0 && (((op == 'd' || op == 'D') && *cp) ||
-                           (op == '{' && *cp != '}') || (op == '[' && *cp != ']') ||
-                           (op == '(' && *cp != ')') || (op == '<' && *cp != '>')))
+        while ((len > 0) &&
+               ((((op == 'd') || (op == 'D')) && *cp) ||
+                ((op == '{') && (*cp != '}')) || ((op == '[') && (*cp != ']')) ||
+                ((op == '(') && (*cp != ')')) || ((op == '<') && (*cp != '>'))))
         {
           if (*cp == '%')
           {
             cp++;
-            if ((*cp == 'Z' || *cp == 'z') && (op == 'd' || op == '{'))
+            if (((*cp == 'Z') || (*cp == 'z')) && ((op == 'd') || (op == '{')))
             {
               if (len >= 5)
               {
-                sprintf(p, "%c%02u%02u", hdr->zoccident ? '-' : '+',
-                        hdr->zhours, hdr->zminutes);
+                sprintf(p, "%c%02u%02u", e->zoccident ? '-' : '+', e->zhours, e->zminutes);
                 p += 5;
                 len -= 5;
               }
@@ -743,31 +822,31 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
             len--;
           }
         }
-        *p = 0;
+        *p = '\0';
 
-        if (op == '[' || op == 'D')
-          tm = localtime(&hdr->date_sent);
+        struct tm tm;
+        if ((op == '[') || (op == 'D'))
+          tm = mutt_date_localtime(e->date_sent);
         else if (op == '(')
-          tm = localtime(&hdr->received);
+          tm = mutt_date_localtime(e->received);
         else if (op == '<')
         {
-          T = time(NULL);
-          tm = localtime(&T);
+          tm = mutt_date_localtime(MUTT_DATE_NOW);
         }
         else
         {
           /* restore sender's time zone */
-          T = hdr->date_sent;
-          if (hdr->zoccident)
-            T -= (hdr->zhours * 3600 + hdr->zminutes * 60);
+          now = e->date_sent;
+          if (e->zoccident)
+            now -= (e->zhours * 3600 + e->zminutes * 60);
           else
-            T += (hdr->zhours * 3600 + hdr->zminutes * 60);
-          tm = gmtime(&T);
+            now += (e->zhours * 3600 + e->zminutes * 60);
+          tm = mutt_date_gmtime(now);
         }
 
         if (!do_locales)
           setlocale(LC_TIME, "C");
-        strftime(tmp, sizeof(tmp), buf, tm);
+        strftime(tmp, sizeof(tmp), buf, &tm);
         if (!do_locales)
           setlocale(LC_TIME, "");
 
@@ -775,46 +854,53 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
         mutt_format_s(buf + colorlen, buflen - colorlen, prec, tmp);
         add_index_color(buf + colorlen, buflen - colorlen, flags, MT_COLOR_INDEX);
 
-        if (len > 0 && op != 'd' && op != 'D') /* Skip ending op */
+        if ((len > 0) && (op != 'd') && (op != 'D')) /* Skip ending op */
           src = cp + 1;
+        break;
       }
-      break;
 
     case 'e':
       snprintf(fmt, sizeof(fmt), "%%%sd", prec);
-      snprintf(buf, buflen, fmt, mutt_messages_in_thread(ctx, hdr, 1));
+      snprintf(buf, buflen, fmt, mutt_messages_in_thread(m, e, 1));
       break;
 
     case 'E':
       if (!optional)
       {
         snprintf(fmt, sizeof(fmt), "%%%sd", prec);
-        snprintf(buf, buflen, fmt, mutt_messages_in_thread(ctx, hdr, 0));
+        snprintf(buf, buflen, fmt, mutt_messages_in_thread(m, e, 0));
       }
-      else if (mutt_messages_in_thread(ctx, hdr, 0) <= 1)
-        optional = 0;
+      else if (mutt_messages_in_thread(m, e, 0) <= 1)
+        optional = false;
       break;
 
     case 'f':
-      tmp[0] = 0;
-      mutt_addr_write(tmp, sizeof(tmp), hdr->env->from, true);
+      tmp[0] = '\0';
+      mutt_addrlist_write(tmp, sizeof(tmp), &e->env->from, true);
       mutt_format_s(buf, buflen, prec, tmp);
       break;
 
     case 'F':
       if (!optional)
       {
+        const bool is_plain = (src[0] == 'p');
         colorlen = add_index_color(buf, buflen, flags, MT_COLOR_INDEX_AUTHOR);
-        make_from(hdr->env, tmp, sizeof(tmp), 0);
+        make_from(e->env, tmp, sizeof(tmp), false,
+                  (is_plain ? MUTT_FORMAT_PLAIN : MUTT_FORMAT_NO_FLAGS));
         mutt_format_s(buf + colorlen, buflen - colorlen, prec, tmp);
         add_index_color(buf + colorlen, buflen - colorlen, flags, MT_COLOR_INDEX);
+
+        if (is_plain)
+          src++;
       }
-      else if (mutt_addr_is_user(hdr->env->from))
-        optional = 0;
+      else if (mutt_addr_is_user(from))
+      {
+        optional = false;
+      }
       break;
 
     case 'g':
-      tags = driver_tags_get_transformed(&hdr->tags);
+      tags = driver_tags_get_transformed(&e->tags);
       if (!optional)
       {
         colorlen = add_index_color(buf, buflen, flags, MT_COLOR_INDEX_TAGS);
@@ -822,7 +908,7 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
         add_index_color(buf + colorlen, buflen - colorlen, flags, MT_COLOR_INDEX);
       }
       else if (!tags)
-        optional = 0;
+        optional = false;
       FREE(&tags);
       break;
 
@@ -835,12 +921,12 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
       {
         format[0] = op;
         format[1] = *src;
-        format[2] = 0;
+        format[2] = '\0';
 
         tag = mutt_hash_find(TagFormats, format);
         if (tag)
         {
-          tags = driver_tags_get_transformed_for(tag, &hdr->tags);
+          tags = driver_tags_get_transformed_for(&e->tags, tag);
           colorlen = add_index_color(buf, buflen, flags, MT_COLOR_INDEX_TAG);
           mutt_format_s(buf + colorlen, buflen - colorlen, prec, NONULL(tags));
           add_index_color(buf + colorlen, buflen - colorlen, flags, MT_COLOR_INDEX);
@@ -852,105 +938,103 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
       {
         format[0] = op;
         format[1] = *prec;
-        format[2] = 0;
+        format[2] = '\0';
 
         tag = mutt_hash_find(TagFormats, format);
         if (tag)
         {
-          tags = driver_tags_get_transformed_for(tag, &hdr->tags);
+          tags = driver_tags_get_transformed_for(&e->tags, tag);
           if (!tags)
-            optional = 0;
+            optional = false;
           FREE(&tags);
         }
       }
+      break;
     }
-    break;
 
     case 'H':
       /* (Hormel) spam score */
       if (optional)
-        optional = hdr->env->spam ? 1 : 0;
+        optional = !mutt_buffer_is_empty(&e->env->spam);
 
-      if (hdr->env->spam)
-        mutt_format_s(buf, buflen, prec, NONULL(hdr->env->spam->data));
-      else
-        mutt_format_s(buf, buflen, prec, "");
+      mutt_format_s(buf, buflen, prec, mutt_b2s(&e->env->spam));
       break;
 
     case 'i':
-      mutt_format_s(buf, buflen, prec, hdr->env->message_id ? hdr->env->message_id : "<no.id>");
+      mutt_format_s(buf, buflen, prec, e->env->message_id ? e->env->message_id : "<no.id>");
       break;
 
     case 'J':
-      tags = driver_tags_get_transformed(&hdr->tags);
+    {
+      bool have_tags = true;
+      tags = driver_tags_get_transformed(&e->tags);
       if (tags)
       {
-        i = 1; /* reduce reuse recycle */
         if (flags & MUTT_FORMAT_TREE)
         {
           char *parent_tags = NULL;
-          if (hdr->thread->prev && hdr->thread->prev->message)
+          if (e->thread->prev && e->thread->prev->message)
+          {
+            parent_tags = driver_tags_get_transformed(&e->thread->prev->message->tags);
+          }
+          if (!parent_tags && e->thread->parent && e->thread->parent->message)
           {
             parent_tags =
-                driver_tags_get_transformed(&hdr->thread->prev->message->tags);
+                driver_tags_get_transformed(&e->thread->parent->message->tags);
           }
-          if (!parent_tags && hdr->thread->parent && hdr->thread->parent->message)
-          {
-            parent_tags =
-                driver_tags_get_transformed(&hdr->thread->parent->message->tags);
-          }
-          if (parent_tags && mutt_str_strcasecmp(tags, parent_tags) == 0)
-            i = 0;
+          if (parent_tags && (mutt_str_strcasecmp(tags, parent_tags) == 0))
+            have_tags = false;
           FREE(&parent_tags);
         }
       }
       else
-        i = 0;
+        have_tags = false;
 
       if (optional)
-        optional = i;
+        optional = have_tags;
 
       colorlen = add_index_color(buf, buflen, flags, MT_COLOR_INDEX_TAGS);
-      if (i)
+      if (have_tags)
         mutt_format_s(buf + colorlen, buflen - colorlen, prec, tags);
       else
         mutt_format_s(buf + colorlen, buflen - colorlen, prec, "");
       add_index_color(buf + colorlen, buflen - colorlen, flags, MT_COLOR_INDEX);
       FREE(&tags);
       break;
+    }
 
     case 'l':
       if (!optional)
       {
         snprintf(fmt, sizeof(fmt), "%%%sd", prec);
         colorlen = add_index_color(buf, buflen, flags, MT_COLOR_INDEX_SIZE);
-        snprintf(buf + colorlen, buflen - colorlen, fmt, (int) hdr->lines);
+        snprintf(buf + colorlen, buflen - colorlen, fmt, (int) e->lines);
         add_index_color(buf + colorlen, buflen - colorlen, flags, MT_COLOR_INDEX);
       }
-      else if (hdr->lines <= 0)
-        optional = 0;
+      else if (e->lines <= 0)
+        optional = false;
       break;
 
     case 'L':
       if (!optional)
       {
         colorlen = add_index_color(buf, buflen, flags, MT_COLOR_INDEX_AUTHOR);
-        make_from(hdr->env, tmp, sizeof(tmp), 1);
+        make_from(e->env, tmp, sizeof(tmp), true, flags);
         mutt_format_s(buf + colorlen, buflen - colorlen, prec, tmp);
         add_index_color(buf + colorlen, buflen - colorlen, flags, MT_COLOR_INDEX);
       }
-      else if (!check_for_mailing_list(hdr->env->to, NULL, NULL, 0) &&
-               !check_for_mailing_list(hdr->env->cc, NULL, NULL, 0))
+      else if (!check_for_mailing_list(&e->env->to, NULL, NULL, 0) &&
+               !check_for_mailing_list(&e->env->cc, NULL, NULL, 0))
       {
-        optional = 0;
+        optional = false;
       }
       break;
 
     case 'm':
-      if (ctx)
+      if (m)
       {
         snprintf(fmt, sizeof(fmt), "%%%sd", prec);
-        snprintf(buf, buflen, fmt, ctx->msgcount);
+        snprintf(buf, buflen, fmt, m->msg_count);
       }
       else
         mutt_str_strfcpy(buf, "(null)", buflen);
@@ -958,8 +1042,7 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
 
     case 'n':
       colorlen = add_index_color(buf, buflen, flags, MT_COLOR_INDEX_AUTHOR);
-      mutt_format_s(buf + colorlen, buflen - colorlen, prec,
-                    mutt_get_name(hdr->env->from));
+      mutt_format_s(buf + colorlen, buflen - colorlen, prec, mutt_get_name(from));
       add_index_color(buf + colorlen, buflen - colorlen, flags, MT_COLOR_INDEX);
       break;
 
@@ -968,9 +1051,9 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
       if (!optional)
       {
         colorlen = add_index_color(buf, buflen, flags, MT_COLOR_INDEX_COLLAPSED);
-        if (threads && is_index && hdr->collapsed && hdr->num_hidden > 1)
+        if (threads && is_index && e->collapsed && (e->num_hidden > 1))
         {
-          snprintf(buf + colorlen, buflen - colorlen, fmt, hdr->num_hidden);
+          snprintf(buf + colorlen, buflen - colorlen, fmt, e->num_hidden);
           add_index_color(buf, buflen - colorlen, flags, MT_COLOR_INDEX);
         }
         else if (is_index && threads)
@@ -983,8 +1066,8 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
       }
       else
       {
-        if (!(threads && is_index && hdr->collapsed && hdr->num_hidden > 1))
-          optional = 0;
+        if (!(threads && is_index && e->collapsed && (e->num_hidden > 1)))
+          optional = false;
       }
       break;
 
@@ -992,77 +1075,77 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
       if (!optional)
       {
         snprintf(fmt, sizeof(fmt), "%%%sd", prec);
-        snprintf(buf, buflen, fmt, hdr->score);
+        snprintf(buf, buflen, fmt, e->score);
       }
       else
       {
-        if (hdr->score == 0)
-          optional = 0;
+        if (e->score == 0)
+          optional = false;
       }
       break;
 
     case 'O':
       if (!optional)
       {
-        make_from_addr(hdr->env, tmp, sizeof(tmp), 1);
-        if (!SaveAddress && (p = strpbrk(tmp, "%@")))
-          *p = 0;
+        make_from_addr(e->env, tmp, sizeof(tmp), true);
+        if (!C_SaveAddress && (p = strpbrk(tmp, "%@")))
+          *p = '\0';
         mutt_format_s(buf, buflen, prec, tmp);
       }
-      else if (!check_for_mailing_list_addr(hdr->env->to, NULL, 0) &&
-               !check_for_mailing_list_addr(hdr->env->cc, NULL, 0))
+      else if (!check_for_mailing_list_addr(&e->env->to, NULL, 0) &&
+               !check_for_mailing_list_addr(&e->env->cc, NULL, 0))
       {
-        optional = 0;
+        optional = false;
       }
       break;
 
     case 'P':
-      mutt_str_strfcpy(buf, NONULL(hfi->pager_progress), buflen);
+      mutt_str_strfcpy(buf, hfi->pager_progress, buflen);
       break;
 
 #ifdef USE_NNTP
     case 'q':
-      mutt_format_s(buf, buflen, prec, hdr->env->newsgroups ? hdr->env->newsgroups : "");
+      mutt_format_s(buf, buflen, prec, e->env->newsgroups ? e->env->newsgroups : "");
       break;
 #endif
 
     case 'r':
-      tmp[0] = 0;
-      mutt_addr_write(tmp, sizeof(tmp), hdr->env->to, true);
-      if (optional && tmp[0] == '\0')
-        optional = 0;
+      tmp[0] = '\0';
+      mutt_addrlist_write(tmp, sizeof(tmp), &e->env->to, true);
+      if (optional && (tmp[0] == '\0'))
+        optional = false;
       mutt_format_s(buf, buflen, prec, tmp);
       break;
 
     case 'R':
-      tmp[0] = 0;
-      mutt_addr_write(tmp, sizeof(tmp), hdr->env->cc, true);
-      if (optional && tmp[0] == '\0')
-        optional = 0;
+      tmp[0] = '\0';
+      mutt_addrlist_write(tmp, sizeof(tmp), &e->env->cc, true);
+      if (optional && (tmp[0] == '\0'))
+        optional = false;
       mutt_format_s(buf, buflen, prec, tmp);
       break;
 
     case 's':
     {
       char *subj = NULL;
-      if (hdr->env->disp_subj)
-        subj = hdr->env->disp_subj;
-      else if (SubjectRegexList)
-        subj = apply_subject_mods(hdr->env);
+      if (e->env->disp_subj)
+        subj = e->env->disp_subj;
+      else if (!STAILQ_EMPTY(&SubjectRegexList))
+        subj = apply_subject_mods(e->env);
       else
-        subj = hdr->env->subject;
-      if (flags & MUTT_FORMAT_TREE && !hdr->collapsed)
+        subj = e->env->subject;
+      if (flags & MUTT_FORMAT_TREE && !e->collapsed)
       {
         if (flags & MUTT_FORMAT_FORCESUBJ)
         {
           colorlen = add_index_color(buf, buflen, flags, MT_COLOR_INDEX_SUBJECT);
           mutt_format_s(buf + colorlen, buflen - colorlen, "", NONULL(subj));
           add_index_color(buf + colorlen, buflen - colorlen, flags, MT_COLOR_INDEX);
-          snprintf(tmp, sizeof(tmp), "%s%s", hdr->tree, buf);
+          snprintf(tmp, sizeof(tmp), "%s%s", e->tree, buf);
           mutt_format_s_tree(buf, buflen, prec, tmp);
         }
         else
-          mutt_format_s_tree(buf, buflen, prec, hdr->tree);
+          mutt_format_s_tree(buf, buflen, prec, e->tree);
       }
       else
       {
@@ -1070,187 +1153,193 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
         mutt_format_s(buf + colorlen, buflen - colorlen, prec, NONULL(subj));
         add_index_color(buf + colorlen, buflen - colorlen, flags, MT_COLOR_INDEX);
       }
+      break;
     }
-    break;
 
     case 'S':
-      if (hdr->deleted)
-        wch = get_nth_wchar(FlagChars, FlagCharDeleted);
-      else if (hdr->attach_del)
-        wch = get_nth_wchar(FlagChars, FlagCharDeletedAttach);
-      else if (hdr->tagged)
-        wch = get_nth_wchar(FlagChars, FlagCharTagged);
-      else if (hdr->flagged)
-        wch = get_nth_wchar(FlagChars, FlagCharImportant);
-      else if (hdr->replied)
-        wch = get_nth_wchar(FlagChars, FlagCharReplied);
-      else if (hdr->read && (ctx && ctx->msgnotreadyet != hdr->msgno))
-        wch = get_nth_wchar(FlagChars, FlagCharSEmpty);
-      else if (hdr->old)
-        wch = get_nth_wchar(FlagChars, FlagCharOld);
+    {
+      const char *wch = NULL;
+      if (e->deleted)
+        wch = get_nth_wchar(C_FlagChars, FLAG_CHAR_DELETED);
+      else if (e->attach_del)
+        wch = get_nth_wchar(C_FlagChars, FLAG_CHAR_DELETED_ATTACH);
+      else if (e->tagged)
+        wch = get_nth_wchar(C_FlagChars, FLAG_CHAR_TAGGED);
+      else if (e->flagged)
+        wch = get_nth_wchar(C_FlagChars, FLAG_CHAR_IMPORTANT);
+      else if (e->replied)
+        wch = get_nth_wchar(C_FlagChars, FLAG_CHAR_REPLIED);
+      else if (e->read && (ctx && (ctx->msg_not_read_yet != e->msgno)))
+        wch = get_nth_wchar(C_FlagChars, FLAG_CHAR_SEMPTY);
+      else if (e->old)
+        wch = get_nth_wchar(C_FlagChars, FLAG_CHAR_OLD);
       else
-        wch = get_nth_wchar(FlagChars, FlagCharNew);
+        wch = get_nth_wchar(C_FlagChars, FLAG_CHAR_NEW);
 
       snprintf(tmp, sizeof(tmp), "%s", wch);
       colorlen = add_index_color(buf, buflen, flags, MT_COLOR_INDEX_FLAGS);
       mutt_format_s(buf + colorlen, buflen - colorlen, prec, tmp);
       add_index_color(buf + colorlen, buflen - colorlen, flags, MT_COLOR_INDEX);
       break;
+    }
 
     case 't':
-      tmp[0] = 0;
-      if (!check_for_mailing_list(hdr->env->to, "To ", tmp, sizeof(tmp)) &&
-          !check_for_mailing_list(hdr->env->cc, "Cc ", tmp, sizeof(tmp)))
+      tmp[0] = '\0';
+      if (!check_for_mailing_list(&e->env->to, "To ", tmp, sizeof(tmp)) &&
+          !check_for_mailing_list(&e->env->cc, "Cc ", tmp, sizeof(tmp)))
       {
-        if (hdr->env->to)
-          snprintf(tmp, sizeof(tmp), "To %s", mutt_get_name(hdr->env->to));
-        else if (hdr->env->cc)
-          snprintf(tmp, sizeof(tmp), "Cc %s", mutt_get_name(hdr->env->cc));
+        if (to)
+          snprintf(tmp, sizeof(tmp), "To %s", mutt_get_name(to));
+        else if (cc)
+          snprintf(tmp, sizeof(tmp), "Cc %s", mutt_get_name(cc));
       }
       mutt_format_s(buf, buflen, prec, tmp);
       break;
 
     case 'T':
+    {
+      int i;
       snprintf(fmt, sizeof(fmt), "%%%ss", prec);
       snprintf(buf, buflen, fmt,
-               (ToChars && ((i = user_is_recipient(hdr))) < ToChars->len) ?
-                   ToChars->chars[i] :
+               (C_ToChars && ((i = user_is_recipient(e))) < C_ToChars->len) ?
+                   C_ToChars->chars[i] :
                    " ");
       break;
+    }
 
     case 'u':
-      if (hdr->env->from && hdr->env->from->mailbox)
+      if (from && from->mailbox)
       {
-        mutt_str_strfcpy(tmp, mutt_addr_for_display(hdr->env->from), sizeof(tmp));
+        mutt_str_strfcpy(tmp, mutt_addr_for_display(from), sizeof(tmp));
         p = strpbrk(tmp, "%@");
         if (p)
-          *p = 0;
+          *p = '\0';
       }
       else
-        tmp[0] = 0;
+        tmp[0] = '\0';
       mutt_format_s(buf, buflen, prec, tmp);
       break;
 
     case 'v':
-      if (mutt_addr_is_user(hdr->env->from))
+      if (mutt_addr_is_user(from))
       {
-        if (hdr->env->to)
-          mutt_format_s(tmp, sizeof(tmp), prec, mutt_get_name(hdr->env->to));
-        else if (hdr->env->cc)
-          mutt_format_s(tmp, sizeof(tmp), prec, mutt_get_name(hdr->env->cc));
+        if (to)
+          mutt_format_s(tmp, sizeof(tmp), prec, mutt_get_name(to));
+        else if (cc)
+          mutt_format_s(tmp, sizeof(tmp), prec, mutt_get_name(cc));
         else
-          *tmp = 0;
+          *tmp = '\0';
       }
       else
-        mutt_format_s(tmp, sizeof(tmp), prec, mutt_get_name(hdr->env->from));
+        mutt_format_s(tmp, sizeof(tmp), prec, mutt_get_name(from));
       p = strpbrk(tmp, " %@");
       if (p)
-        *p = 0;
+        *p = '\0';
       mutt_format_s(buf, buflen, prec, tmp);
       break;
 
     case 'W':
       if (!optional)
       {
-        mutt_format_s(buf, buflen, prec,
-                      hdr->env->organization ? hdr->env->organization : "");
+        mutt_format_s(buf, buflen, prec, e->env->organization ? e->env->organization : "");
       }
-      else if (!hdr->env->organization)
-        optional = 0;
+      else if (!e->env->organization)
+        optional = false;
       break;
 
 #ifdef USE_NNTP
     case 'x':
       if (!optional)
       {
-        mutt_format_s(buf, buflen, prec,
-                      hdr->env->x_comment_to ? hdr->env->x_comment_to : "");
+        mutt_format_s(buf, buflen, prec, e->env->x_comment_to ? e->env->x_comment_to : "");
       }
-      else if (!hdr->env->x_comment_to)
-        optional = 0;
+      else if (!e->env->x_comment_to)
+        optional = false;
       break;
 #endif
 
     case 'X':
     {
-      int count = mutt_count_body_parts(ctx, hdr);
+      int count = mutt_count_body_parts(m, e);
 
       /* The recursion allows messages without depth to return 0. */
       if (optional)
-        optional = count != 0;
+        optional = (count != 0);
 
       snprintf(fmt, sizeof(fmt), "%%%sd", prec);
       snprintf(buf, buflen, fmt, count);
+      break;
     }
-    break;
 
     case 'y':
       if (optional)
-        optional = hdr->env->x_label ? 1 : 0;
+        optional = (e->env->x_label != NULL);
 
       colorlen = add_index_color(buf, buflen, flags, MT_COLOR_INDEX_LABEL);
-      mutt_format_s(buf + colorlen, buflen - colorlen, prec, NONULL(hdr->env->x_label));
+      mutt_format_s(buf + colorlen, buflen - colorlen, prec, NONULL(e->env->x_label));
       add_index_color(buf + colorlen, buflen - colorlen, flags, MT_COLOR_INDEX);
       break;
 
     case 'Y':
-      if (hdr->env->x_label)
+    {
+      bool label = true;
+      if (e->env->x_label)
       {
-        i = 1; /* reduce reuse recycle */
-        struct Header *htmp = NULL;
-        if (flags & MUTT_FORMAT_TREE && (hdr->thread->prev && hdr->thread->prev->message &&
-                                         hdr->thread->prev->message->env->x_label))
+        struct Email *e_tmp = NULL;
+        if (flags & MUTT_FORMAT_TREE && (e->thread->prev && e->thread->prev->message &&
+                                         e->thread->prev->message->env->x_label))
         {
-          htmp = hdr->thread->prev->message;
+          e_tmp = e->thread->prev->message;
         }
         else if (flags & MUTT_FORMAT_TREE &&
-                 (hdr->thread->parent && hdr->thread->parent->message &&
-                  hdr->thread->parent->message->env->x_label))
+                 (e->thread->parent && e->thread->parent->message &&
+                  e->thread->parent->message->env->x_label))
         {
-          htmp = hdr->thread->parent->message;
+          e_tmp = e->thread->parent->message;
         }
-        if (htmp && (mutt_str_strcasecmp(hdr->env->x_label, htmp->env->x_label) == 0))
-          i = 0;
+        if (e_tmp && (mutt_str_strcasecmp(e->env->x_label, e_tmp->env->x_label) == 0))
+          label = false;
       }
       else
-        i = 0;
+        label = false;
 
       if (optional)
-        optional = i;
+        optional = label;
 
       colorlen = add_index_color(buf, buflen, flags, MT_COLOR_INDEX_LABEL);
-      if (i)
-        mutt_format_s(buf + colorlen, buflen - colorlen, prec, NONULL(hdr->env->x_label));
+      if (label)
+        mutt_format_s(buf + colorlen, buflen - colorlen, prec, NONULL(e->env->x_label));
       else
         mutt_format_s(buf + colorlen, buflen - colorlen, prec, "");
       add_index_color(buf + colorlen, buflen - colorlen, flags, MT_COLOR_INDEX);
       break;
+    }
 
     case 'z':
       if (src[0] == 's') /* status: deleted/new/old/replied */
       {
-        char *ch = NULL;
-        if (hdr->deleted)
-          ch = get_nth_wchar(FlagChars, FlagCharDeleted);
-        else if (hdr->attach_del)
-          ch = get_nth_wchar(FlagChars, FlagCharDeletedAttach);
-        else if (threads && thread_is_new(ctx, hdr))
-          ch = get_nth_wchar(FlagChars, FlagCharNewThread);
-        else if (threads && thread_is_old(ctx, hdr))
-          ch = get_nth_wchar(FlagChars, FlagCharOldThread);
-        else if (hdr->read && (ctx && (ctx->msgnotreadyet != hdr->msgno)))
+        const char *ch = NULL;
+        if (e->deleted)
+          ch = get_nth_wchar(C_FlagChars, FLAG_CHAR_DELETED);
+        else if (e->attach_del)
+          ch = get_nth_wchar(C_FlagChars, FLAG_CHAR_DELETED_ATTACH);
+        else if (threads && thread_is_new(ctx, e))
+          ch = get_nth_wchar(C_FlagChars, FLAG_CHAR_NEW_THREAD);
+        else if (threads && thread_is_old(ctx, e))
+          ch = get_nth_wchar(C_FlagChars, FLAG_CHAR_OLD_THREAD);
+        else if (e->read && (ctx && (ctx->msg_not_read_yet != e->msgno)))
         {
-          if (hdr->replied)
-            ch = get_nth_wchar(FlagChars, FlagCharReplied);
+          if (e->replied)
+            ch = get_nth_wchar(C_FlagChars, FLAG_CHAR_REPLIED);
           else
-            ch = get_nth_wchar(FlagChars, FlagCharZEmpty);
+            ch = get_nth_wchar(C_FlagChars, FLAG_CHAR_ZEMPTY);
         }
         else
         {
-          if (hdr->old)
-            ch = get_nth_wchar(FlagChars, FlagCharOld);
+          if (e->old)
+            ch = get_nth_wchar(C_FlagChars, FLAG_CHAR_OLD);
           else
-            ch = get_nth_wchar(FlagChars, FlagCharNew);
+            ch = get_nth_wchar(C_FlagChars, FLAG_CHAR_NEW);
         }
 
         snprintf(tmp, sizeof(tmp), "%s", ch);
@@ -1258,30 +1347,32 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
       }
       else if (src[0] == 'c') /* crypto */
       {
-        char *ch = NULL;
-        if ((WithCrypto != 0) && (hdr->security & GOODSIGN))
-          ch = "S";
-        else if ((WithCrypto != 0) && (hdr->security & ENCRYPT))
-          ch = "P";
-        else if ((WithCrypto != 0) && (hdr->security & SIGN))
-          ch = "s";
-        else if (((WithCrypto & APPLICATION_PGP) != 0) && ((hdr->security & PGPKEY) == PGPKEY))
-          ch = "K";
+        const char *ch = "";
+        if ((WithCrypto != 0) && (e->security & SEC_GOODSIGN))
+          ch = get_nth_wchar(C_CryptChars, FLAG_CHAR_CRYPT_GOOD_SIGN);
+        else if ((WithCrypto != 0) && (e->security & SEC_ENCRYPT))
+          ch = get_nth_wchar(C_CryptChars, FLAG_CHAR_CRYPT_ENCRYPTED);
+        else if ((WithCrypto != 0) && (e->security & SEC_SIGN))
+          ch = get_nth_wchar(C_CryptChars, FLAG_CHAR_CRYPT_SIGNED);
+        else if (((WithCrypto & APPLICATION_PGP) != 0) && ((e->security & PGP_KEY) == PGP_KEY))
+        {
+          ch = get_nth_wchar(C_CryptChars, FLAG_CHAR_CRYPT_CONTAINS_KEY);
+        }
         else
-          ch = " ";
+          ch = get_nth_wchar(C_CryptChars, FLAG_CHAR_CRYPT_NO_CRYPTO);
 
         snprintf(tmp, sizeof(tmp), "%s", ch);
         src++;
       }
       else if (src[0] == 't') /* tagged, flagged, recipient */
       {
-        char *ch = NULL;
-        if (hdr->tagged)
-          ch = get_nth_wchar(FlagChars, FlagCharTagged);
-        else if (hdr->flagged)
-          ch = get_nth_wchar(FlagChars, FlagCharImportant);
+        const char *ch = "";
+        if (e->tagged)
+          ch = get_nth_wchar(C_FlagChars, FLAG_CHAR_TAGGED);
+        else if (e->flagged)
+          ch = get_nth_wchar(C_FlagChars, FLAG_CHAR_IMPORTANT);
         else
-          ch = get_nth_wchar(ToChars, user_is_recipient(hdr));
+          ch = get_nth_wchar(C_ToChars, user_is_recipient(e));
 
         snprintf(tmp, sizeof(tmp), "%s", ch);
         src++;
@@ -1297,51 +1388,51 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
     case 'Z':
     {
       /* New/Old for threads; replied; New/Old for messages */
-      char *first = NULL;
-      if (threads && thread_is_new(ctx, hdr))
-        first = get_nth_wchar(FlagChars, FlagCharNewThread);
-      else if (threads && thread_is_old(ctx, hdr))
-        first = get_nth_wchar(FlagChars, FlagCharOldThread);
-      else if (hdr->read && (ctx && (ctx->msgnotreadyet != hdr->msgno)))
+      const char *first = NULL;
+      if (threads && thread_is_new(ctx, e))
+        first = get_nth_wchar(C_FlagChars, FLAG_CHAR_NEW_THREAD);
+      else if (threads && thread_is_old(ctx, e))
+        first = get_nth_wchar(C_FlagChars, FLAG_CHAR_OLD_THREAD);
+      else if (e->read && (ctx && (ctx->msg_not_read_yet != e->msgno)))
       {
-        if (hdr->replied)
-          first = get_nth_wchar(FlagChars, FlagCharReplied);
+        if (e->replied)
+          first = get_nth_wchar(C_FlagChars, FLAG_CHAR_REPLIED);
         else
-          first = get_nth_wchar(FlagChars, FlagCharZEmpty);
+          first = get_nth_wchar(C_FlagChars, FLAG_CHAR_ZEMPTY);
       }
       else
       {
-        if (hdr->old)
-          first = get_nth_wchar(FlagChars, FlagCharOld);
+        if (e->old)
+          first = get_nth_wchar(C_FlagChars, FLAG_CHAR_OLD);
         else
-          first = get_nth_wchar(FlagChars, FlagCharNew);
+          first = get_nth_wchar(C_FlagChars, FLAG_CHAR_NEW);
       }
 
       /* Marked for deletion; deleted attachments; crypto */
-      char *second = NULL;
-      if (hdr->deleted)
-        second = get_nth_wchar(FlagChars, FlagCharDeleted);
-      else if (hdr->attach_del)
-        second = get_nth_wchar(FlagChars, FlagCharDeletedAttach);
-      else if ((WithCrypto != 0) && (hdr->security & GOODSIGN))
-        second = "S";
-      else if ((WithCrypto != 0) && (hdr->security & ENCRYPT))
-        second = "P";
-      else if ((WithCrypto != 0) && (hdr->security & SIGN))
-        second = "s";
-      else if (((WithCrypto & APPLICATION_PGP) != 0) && (hdr->security & PGPKEY))
-        second = "K";
+      const char *second = "";
+      if (e->deleted)
+        second = get_nth_wchar(C_FlagChars, FLAG_CHAR_DELETED);
+      else if (e->attach_del)
+        second = get_nth_wchar(C_FlagChars, FLAG_CHAR_DELETED_ATTACH);
+      else if ((WithCrypto != 0) && (e->security & SEC_GOODSIGN))
+        second = get_nth_wchar(C_CryptChars, FLAG_CHAR_CRYPT_GOOD_SIGN);
+      else if ((WithCrypto != 0) && (e->security & SEC_ENCRYPT))
+        second = get_nth_wchar(C_CryptChars, FLAG_CHAR_CRYPT_ENCRYPTED);
+      else if ((WithCrypto != 0) && (e->security & SEC_SIGN))
+        second = get_nth_wchar(C_CryptChars, FLAG_CHAR_CRYPT_SIGNED);
+      else if (((WithCrypto & APPLICATION_PGP) != 0) && (e->security & PGP_KEY))
+        second = get_nth_wchar(C_CryptChars, FLAG_CHAR_CRYPT_CONTAINS_KEY);
       else
-        second = " ";
+        second = get_nth_wchar(C_CryptChars, FLAG_CHAR_CRYPT_NO_CRYPTO);
 
       /* Tagged, flagged and recipient flag */
-      char *third = NULL;
-      if (hdr->tagged)
-        third = get_nth_wchar(FlagChars, FlagCharTagged);
-      else if (hdr->flagged)
-        third = get_nth_wchar(FlagChars, FlagCharImportant);
+      const char *third = "";
+      if (e->tagged)
+        third = get_nth_wchar(C_FlagChars, FLAG_CHAR_TAGGED);
+      else if (e->flagged)
+        third = get_nth_wchar(C_FlagChars, FLAG_CHAR_IMPORTANT);
       else
-        third = get_nth_wchar(ToChars, user_is_recipient(hdr));
+        third = get_nth_wchar(C_ToChars, user_is_recipient(e));
 
       snprintf(tmp, sizeof(tmp), "%s%s%s", first, second, third);
     }
@@ -1350,6 +1441,29 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
       mutt_format_s(buf + colorlen, buflen - colorlen, prec, tmp);
       add_index_color(buf + colorlen, buflen - colorlen, flags, MT_COLOR_INDEX);
       break;
+
+    case '@':
+    {
+      const char *end = src;
+      static unsigned char recurse = 0;
+
+      while ((*end != '\0') && (*end != '@'))
+        end++;
+      if ((*end == '@') && (recurse < 20))
+      {
+        recurse++;
+        mutt_str_substr_copy(src, end, tmp, sizeof(tmp));
+        mutt_expando_format(tmp, sizeof(tmp), col, cols,
+                            NONULL(mutt_idxfmt_hook(tmp, m, e)),
+                            index_format_str, data, flags);
+        mutt_format_s_x(buf, buflen, prec, tmp, true);
+        recurse--;
+
+        src = end + 1;
+        break;
+      }
+    }
+      /* fallthrough */
 
     default:
       snprintf(buf, buflen, "%%%s%c", prec, op);
@@ -1370,21 +1484,41 @@ static const char *index_format_str(char *buf, size_t buflen, size_t col, int co
   return src;
 }
 
-void mutt_make_string_flags(char *buf, size_t buflen, const char *s,
-                            struct Context *ctx, struct Header *hdr, enum FormatFlag flags)
+/**
+ * mutt_make_string_flags - Create formatted strings using mailbox expandos
+ * @param buf    Buffer for the result
+ * @param buflen Buffer length
+ * @param s      printf-line format string
+ * @param ctx    Mailbox Context
+ * @param m      Mailbox
+ * @param e      Email
+ * @param flags  Flags, see #MuttFormatFlags
+ */
+void mutt_make_string_flags(char *buf, size_t buflen, const char *s, struct Context *ctx,
+                            struct Mailbox *m, struct Email *e, MuttFormatFlags flags)
 {
   struct HdrFormatInfo hfi;
 
-  hfi.hdr = hdr;
+  hfi.email = e;
   hfi.ctx = ctx;
+  hfi.mailbox = m;
   hfi.pager_progress = 0;
 
   mutt_expando_format(buf, buflen, 0, MuttIndexWindow->cols, s,
                       index_format_str, (unsigned long) &hfi, flags);
 }
 
+/**
+ * mutt_make_string_info - Create pager status bar string
+ * @param buf    Buffer for the result
+ * @param buflen Buffer length
+ * @param cols   Number of screen columns
+ * @param s      printf-line format string
+ * @param hfi    Mailbox data to pass to the formatter
+ * @param flags  Flags, see #MuttFormatFlags
+ */
 void mutt_make_string_info(char *buf, size_t buflen, int cols, const char *s,
-                           struct HdrFormatInfo *hfi, enum FormatFlag flags)
+                           struct HdrFormatInfo *hfi, MuttFormatFlags flags)
 {
   mutt_expando_format(buf, buflen, 0, cols, s, index_format_str, (unsigned long) hfi, flags);
 }

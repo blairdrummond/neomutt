@@ -20,26 +20,43 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _CONN_GLOBALS_H
-#define _CONN_GLOBALS_H
+#ifndef MUTT_CONN_CONN_GLOBALS_H
+#define MUTT_CONN_CONN_GLOBALS_H
+
+#include <stdbool.h>
 
 /* These variables are backing for config items */
-extern short ConnectTimeout;
+extern short C_ConnectTimeout;
 
 #ifdef USE_SSL
-extern const char *CertificateFile;
-extern const char *EntropyFile;
-extern const char *SslCiphers;
-extern const char *SslClientCert;
+extern const char *C_CertificateFile;
+extern const char *C_EntropyFile;
+extern const char *C_SslCiphers;
+extern const char *C_SslClientCert;
 #ifdef USE_SSL_GNUTLS
-extern const char *SslCaCertificatesFile;
-extern short SslMinDhPrimeBits;
+extern const char *C_SslCaCertificatesFile;
+extern short C_SslMinDhPrimeBits;
 #endif
 #endif
 
 #ifdef USE_SOCKET
-extern const char *Preconnect;
-extern const char *Tunnel;
+extern const char *C_Preconnect;
+extern const char *C_Tunnel;
 #endif
 
-#endif /* _CONN_GLOBALS_H */
+/* These Config Variables are only used in conn/conn_raw.c */
+#ifdef HAVE_GETADDRINFO
+extern bool C_UseIpv6;
+#endif
+
+#ifdef USE_SSL
+extern bool C_SslUseSslv3;
+extern bool C_SslUseTlsv1;
+extern bool C_SslUseTlsv11;
+extern bool C_SslUseTlsv12;
+extern bool C_SslUseTlsv13;
+extern bool C_SslVerifyDates;
+extern bool C_SslVerifyHost;
+#endif
+
+#endif /* MUTT_CONN_CONN_GLOBALS_H */

@@ -21,6 +21,12 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @page bcache Body Caching - local copies of email bodies
+ *
+ * Body Caching - local copies of email bodies
+ */
+
 #include "config.h"
 #include <dirent.h>
 #include <errno.h>
@@ -30,12 +36,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "mutt/mutt.h"
-#include "conn/conn.h"
+#include "email/lib.h"
 #include "bcache.h"
-#include "globals.h"
 #include "mutt_account.h"
-#include "protos.h"
-#include "url.h"
+#include "muttlib.h"
+
+/* These Config Variables are only used in bcache.c */
+char *C_MessageCachedir; ///< Config: (imap/pop) Directory for the message cache
 
 /**
  * struct BodyCache - Local cache of email bodies
@@ -55,40 +62,38 @@ struct BodyCache
  * @retval  0 Success
  * @retval -1 Failure
  */
-static int bcache_path(struct Account *account, const char *mailbox, char *dst, size_t dstlen)
+static int bcache_path(struct ConnAccount *account, const char *mailbox, char *dst, size_t dstlen)
 {
-  char host[STRING];
-  struct Url url = { 0 };
+  char host[256];
+  struct Url url = { U_UNKNOWN };
   int len;
 
-  if (!account || !MessageCachedir || !*MessageCachedir || !dst || (dstlen == 0))
+  if (!account || !C_MessageCachedir || !dst || (dstlen == 0))
     return -1;
 
   /* make up a Url we can turn into a string */
   mutt_account_tourl(account, &url);
-  /*
-   * mutt_account_tourl() just sets up some pointers;
-   * if this ever changes, we have a memleak here
-   */
+  /* mutt_account_tourl() just sets up some pointers;
+   * if this ever changes, we have a memleak here */
   url.path = NULL;
   if (url_tostring(&url, host, sizeof(host), U_PATH) < 0)
   {
-    mutt_debug(1, "URL to string failed\n");
+    mutt_debug(LL_DEBUG1, "URL to string failed\n");
     return -1;
   }
 
   size_t mailboxlen = mutt_str_strlen(mailbox);
-  len = snprintf(dst, dstlen, "%s/%s%s%s", MessageCachedir, host, NONULL(mailbox),
-                 (mailboxlen != 0 && mailbox[mailboxlen - 1] == '/') ? "" : "/");
+  len = snprintf(dst, dstlen, "%s/%s%s%s", C_MessageCachedir, host, NONULL(mailbox),
+                 ((mailboxlen != 0) && (mailbox[mailboxlen - 1] == '/')) ? "" : "/");
 
   mutt_encode_path(dst, dstlen, dst);
 
-  mutt_debug(3, "rc: %d, path: '%s'\n", len, dst);
+  mutt_debug(LL_DEBUG3, "rc: %d, path: '%s'\n", len, dst);
 
-  if (len < 0 || (size_t) len >= dstlen - 1)
+  if ((len < 0) || ((size_t) len >= dstlen - 1))
     return -1;
 
-  mutt_debug(3, "directory: '%s'\n", dst);
+  mutt_debug(LL_DEBUG3, "directory: '%s'\n", dst);
 
   return 0;
 }
@@ -101,8 +106,8 @@ static int bcache_path(struct Account *account, const char *mailbox, char *dst, 
  */
 static int mutt_bcache_move(struct BodyCache *bcache, const char *id, const char *newid)
 {
-  char path[PATH_MAX];
-  char newpath[PATH_MAX];
+  char path[PATH_MAX + 16];
+  char newpath[PATH_MAX + 16];
 
   if (!bcache || !id || !*id || !newid || !*newid)
     return -1;
@@ -110,7 +115,7 @@ static int mutt_bcache_move(struct BodyCache *bcache, const char *id, const char
   snprintf(path, sizeof(path), "%s%s", bcache->path, id);
   snprintf(newpath, sizeof(newpath), "%s%s", bcache->path, newid);
 
-  mutt_debug(3, "bcache: mv: '%s' '%s'\n", path, newpath);
+  mutt_debug(LL_DEBUG3, "bcache: mv: '%s' '%s'\n", path, newpath);
 
   return rename(path, newpath);
 }
@@ -125,29 +130,25 @@ static int mutt_bcache_move(struct BodyCache *bcache, const char *id, const char
  * separated by '/' (if it knows of such a concepts like mailboxes or
  * hierarchies)
  */
-struct BodyCache *mutt_bcache_open(struct Account *account, const char *mailbox)
+struct BodyCache *mutt_bcache_open(struct ConnAccount *account, const char *mailbox)
 {
-  struct BodyCache *bcache = NULL;
-
   if (!account)
-    goto bail;
+    return NULL;
 
-  bcache = mutt_mem_calloc(1, sizeof(struct BodyCache));
+  struct BodyCache *bcache = mutt_mem_calloc(1, sizeof(struct BodyCache));
   if (bcache_path(account, mailbox, bcache->path, sizeof(bcache->path)) < 0)
-    goto bail;
-  bcache->pathlen = mutt_str_strlen(bcache->path);
-
-  return bcache;
-
-bail:
-  if (bcache)
+  {
     FREE(&bcache);
-  return NULL;
+    return NULL;
+  }
+
+  bcache->pathlen = mutt_str_strlen(bcache->path);
+  return bcache;
 }
 
 /**
  * mutt_bcache_close - Close an Email-Body Cache
- * @param bcache Body cache
+ * @param[out] bcache Body cache
  *
  * Free all memory of bcache and finally FREE() it, too.
  */
@@ -179,7 +180,7 @@ FILE *mutt_bcache_get(struct BodyCache *bcache, const char *id)
 
   fp = mutt_file_fopen(path, "r");
 
-  mutt_debug(3, "bcache: get: '%s': %s\n", path, fp == NULL ? "no" : "yes");
+  mutt_debug(LL_DEBUG3, "bcache: get: '%s': %s\n", path, fp ? "yes" : "no");
 
   return fp;
 }
@@ -196,7 +197,7 @@ FILE *mutt_bcache_get(struct BodyCache *bcache, const char *id)
  */
 FILE *mutt_bcache_put(struct BodyCache *bcache, const char *id)
 {
-  char path[PATH_MAX];
+  char path[PATH_MAX + 16];
   struct stat sb;
 
   if (!id || !*id || !bcache)
@@ -212,7 +213,7 @@ FILE *mutt_bcache_put(struct BodyCache *bcache, const char *id)
   {
     if (!S_ISDIR(sb.st_mode))
     {
-      mutt_error(_("Message cache isn't a directory: %s."), bcache->path);
+      mutt_error(_("Message cache isn't a directory: %s"), bcache->path);
       return NULL;
     }
   }
@@ -220,12 +221,12 @@ FILE *mutt_bcache_put(struct BodyCache *bcache, const char *id)
   {
     if (mutt_file_mkdir(bcache->path, S_IRWXU | S_IRWXG | S_IRWXO) < 0)
     {
-      mutt_error(_("Can't create %s %s"), bcache->path, strerror(errno));
+      mutt_error(_("Can't create %s: %s"), bcache->path, strerror(errno));
       return NULL;
     }
   }
 
-  mutt_debug(3, "bcache: put: '%s'\n", path);
+  mutt_debug(LL_DEBUG3, "bcache: put: '%s'\n", path);
 
   return mutt_file_fopen(path, "w+");
 }
@@ -264,7 +265,7 @@ int mutt_bcache_del(struct BodyCache *bcache, const char *id)
   mutt_str_strncat(path, sizeof(path), bcache->path, bcache->pathlen);
   mutt_str_strncat(path, sizeof(path), id, mutt_str_strlen(id));
 
-  mutt_debug(3, "bcache: del: '%s'\n", path);
+  mutt_debug(LL_DEBUG3, "bcache: del: '%s'\n", path);
 
   return unlink(path);
 }
@@ -292,9 +293,9 @@ int mutt_bcache_exists(struct BodyCache *bcache, const char *id)
   if (stat(path, &st) < 0)
     rc = -1;
   else
-    rc = S_ISREG(st.st_mode) && st.st_size != 0 ? 0 : -1;
+    rc = (S_ISREG(st.st_mode) && (st.st_size != 0)) ? 0 : -1;
 
-  mutt_debug(3, "bcache: exists: '%s': %s\n", path, rc == 0 ? "yes" : "no");
+  mutt_debug(LL_DEBUG3, "bcache: exists: '%s': %s\n", path, (rc == 0) ? "yes" : "no");
 
   return rc;
 }
@@ -329,19 +330,19 @@ int mutt_bcache_list(struct BodyCache *bcache, bcache_list_t *want_id, void *dat
 
   rc = 0;
 
-  mutt_debug(3, "bcache: list: dir: '%s'\n", bcache->path);
+  mutt_debug(LL_DEBUG3, "bcache: list: dir: '%s'\n", bcache->path);
 
   while ((de = readdir(d)))
   {
-    if ((mutt_str_strncmp(de->d_name, ".", 1) == 0) ||
-        (mutt_str_strncmp(de->d_name, "..", 2) == 0))
+    if (mutt_str_startswith(de->d_name, ".", CASE_MATCH) ||
+        mutt_str_startswith(de->d_name, "..", CASE_MATCH))
     {
       continue;
     }
 
-    mutt_debug(3, "bcache: list: dir: '%s', id :'%s'\n", bcache->path, de->d_name);
+    mutt_debug(LL_DEBUG3, "bcache: list: dir: '%s', id :'%s'\n", bcache->path, de->d_name);
 
-    if (want_id && want_id(de->d_name, bcache, data) != 0)
+    if (want_id && (want_id(de->d_name, bcache, data) != 0))
       goto out;
 
     rc++;
@@ -353,6 +354,6 @@ out:
     if (closedir(d) < 0)
       rc = -1;
   }
-  mutt_debug(3, "bcache: list: did %d entries\n", rc);
+  mutt_debug(LL_DEBUG3, "bcache: list: did %d entries\n", rc);
   return rc;
 }

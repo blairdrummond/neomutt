@@ -30,10 +30,15 @@
 #include <stdio.h>
 #include "crypt_mod.h"
 #include "ncrypt.h"
+#ifdef CRYPT_BACKEND_CLASSIC_SMIME
 #include "smime.h"
+#endif
 
 // clang-format off
-struct CryptModuleSpecs crypt_mod_smime_classic = {
+/**
+ * CryptModSmimeClassic - CLI SMIME - Implements ::CryptModuleSpecs
+ */
+struct CryptModuleSpecs CryptModSmimeClassic = {
   APPLICATION_SMIME,
 
   NULL, /* init */

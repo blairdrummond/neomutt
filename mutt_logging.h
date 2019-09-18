@@ -1,6 +1,6 @@
 /**
  * @file
- * Mutt Logging
+ * NeoMutt Logging
  *
  * @authors
  * Copyright (C) 2018 Richard Russon <rich@flatcap.org>
@@ -20,20 +20,31 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _LOGGING2_H
-#define _LOGGING2_H
+#ifndef MUTT_MUTT_LOGGING_H
+#define MUTT_MUTT_LOGGING_H
 
+#include <stdbool.h>
+#include <stdint.h>
 #include <time.h>
 
-extern short DebugLevel;
-extern char *DebugFile;
-extern bool LogAllowDebugSet;
+struct Buffer;
+struct ConfigDef;
+struct ConfigSet;
+struct NotifyCallback;
+
+extern short C_DebugLevel;
+extern char *C_DebugFile;
 
 int log_disp_curses(time_t stamp, const char *file, int line, const char *function, int level, ...);
 
+void mutt_log_prep(void);
 int  mutt_log_start(void);
 void mutt_log_stop(void);
-int mutt_log_set_level(int level, bool verbose);
-int mutt_log_set_file(const char *file, bool verbose);
+int  mutt_log_set_level(int level, bool verbose);
+int  mutt_log_set_file(const char *file, bool verbose);
+int  mutt_log_observer(struct NotifyCallback *nc);
+int  level_validator(const struct ConfigSet *cs, const struct ConfigDef *cdef, intptr_t value, struct Buffer *err);
 
-#endif /* _LOGGING2_H */
+void mutt_clear_error(void);
+
+#endif /* MUTT_MUTT_LOGGING_H */

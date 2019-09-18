@@ -5,6 +5,7 @@
  * @authors
  * Copyright (C) 1996-1998 Michael R. Elkins <me@mutt.org>
  * Copyright (C) 2000-2007,2017 Brendan Cully <brendan@kublai.com>
+ * Copyright (C) 2018 Richard Russon <rich@flatcap.org>
  *
  * @copyright
  * This program is free software: you can redistribute it and/or modify it under
@@ -22,7 +23,7 @@
  */
 
 /**
- * @page imap IMAP Network Mailbox
+ * @page imap IMAP: Network Mailbox
  *
  * IMAP network mailbox
  *
@@ -34,6 +35,7 @@
  * | imap/auth_cram.c  | @subpage imap_auth_cram  |
  * | imap/auth_gss.c   | @subpage imap_auth_gss   |
  * | imap/auth_login.c | @subpage imap_auth_login |
+ * | imap/auth_oauth.c | @subpage imap_auth_oauth |
  * | imap/auth_plain.c | @subpage imap_auth_plain |
  * | imap/auth_sasl.c  | @subpage imap_auth_sasl  |
  * | imap/browse.c     | @subpage imap_browse     |
@@ -43,63 +45,76 @@
  * | imap/util.c       | @subpage imap_util       |
  */
 
-#ifndef _IMAP_IMAP_H
-#define _IMAP_IMAP_H
+#ifndef MUTT_IMAP_IMAP_H
+#define MUTT_IMAP_IMAP_H
 
-#include "conn/conn.h"
-#include "mutt_account.h"
 #include <stddef.h>
+#include <stdbool.h>
 #include <sys/types.h>
+#include "core/lib.h"
+#include "mx.h"
 
 struct BrowserState;
-struct Context;
-struct Header;
-struct Message;
-struct Pattern;
+struct Buffer;
+struct ConnAccount;
+struct EmailList;
+struct PatternList;
+struct stat;
 
-/**
- * struct ImapMbox - An IMAP mailbox
- */
-struct ImapMbox
-{
-  struct Account account;
-  char *mbox;
-};
+/* These Config Variables are only used in imap/auth.c */
+extern struct Slist *C_ImapAuthenticators;
+
+/* These Config Variables are only used in imap/imap.c */
+extern bool C_ImapIdle;
+extern bool C_ImapRfc5161;
+
+/* These Config Variables are only used in imap/message.c */
+extern char *C_ImapHeaders;
+extern long C_ImapFetchChunkSize;
+
+/* These Config Variables are only used in imap/command.c */
+extern bool C_ImapServernoise;
+
+/* These Config Variables are only used in imap/util.c */
+extern char *C_ImapDelimChars;
+extern short C_ImapPipelineDepth;
 
 /* imap.c */
 int imap_access(const char *path);
-int imap_check_mailbox(struct Context *ctx, int force);
-int imap_delete_mailbox(struct Context *ctx, struct ImapMbox *mx);
-int imap_sync_mailbox(struct Context *ctx, int expunge);
-int imap_buffy_check(int check_stats);
-int imap_status(char *path, int queue);
-int imap_search(struct Context *ctx, const struct Pattern *pat);
+int imap_check_mailbox(struct Mailbox *m, bool force);
+int imap_delete_mailbox(struct Mailbox *m, char *path);
+int imap_sync_mailbox(struct Mailbox *m, bool expunge, bool close);
+int imap_path_status(const char *path, bool queue);
+int imap_mailbox_status(struct Mailbox *m, bool queue);
+int imap_search(struct Mailbox *m, const struct PatternList *pat);
 int imap_subscribe(char *path, bool subscribe);
 int imap_complete(char *buf, size_t buflen, char *path);
-int imap_fast_trash(struct Context *ctx, char *dest);
+int imap_fast_trash(struct Mailbox *m, char *dest);
+enum MailboxType imap_path_probe(const char *path, const struct stat *st);
+int imap_path_canon(char *buf, size_t buflen);
 
-extern struct MxOps mx_imap_ops;
+extern struct MxOps MxImapOps;
 
 /* browse.c */
-int imap_browse(char *path, struct BrowserState *state);
+int imap_browse(const char *path, struct BrowserState *state);
 int imap_mailbox_create(const char *folder);
-int imap_mailbox_rename(const char *mailbox);
+int imap_mailbox_rename(const char *path);
 
 /* message.c */
-int imap_copy_messages(struct Context *ctx, struct Header *h, char *dest, int delete);
+int imap_copy_messages(struct Mailbox *m, struct EmailList *el, const char *dest, bool delete_original);
 
 /* socket.c */
 void imap_logout_all(void);
 
 /* util.c */
-int imap_expand_path(char *path, size_t len);
-int imap_parse_path(const char *path, struct ImapMbox *mx);
-void imap_pretty_mailbox(char *path);
+int imap_expand_path(struct Buffer *buf);
+int imap_parse_path(const char *path, struct ConnAccount *account, char *mailbox, size_t mailboxlen);
+void imap_pretty_mailbox(char *path, size_t pathlen, const char *folder);
 
 int imap_wait_keepalive(pid_t pid);
 void imap_keepalive(void);
 
-void imap_get_parent_path(char *output, const char *path, size_t olen);
+void imap_get_parent_path(const char *path, char *buf, size_t buflen);
 void imap_clean_path(char *path, size_t plen);
 
-#endif /* _IMAP_IMAP_H */
+#endif /* MUTT_IMAP_IMAP_H */

@@ -20,20 +20,21 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _MUTT_KEYMAP_H
-#define _MUTT_KEYMAP_H
+#ifndef MUTT_KEYMAP_H
+#define MUTT_KEYMAP_H
 
+#include "config.h"
 #include <stddef.h>
 #include "mutt/mutt.h"
+#include "mutt_commands.h"
 
+#define MUTT_UNBIND  1<<0
+#define MUTT_UNMACRO 1<<1
 /* maximal length of a key binding sequence used for buffer in km_bindkey */
 #define MAX_SEQ 8
 
 /* type for key storage, the rest of neomutt works fine with int type */
 typedef short keycode_t;
-
-int km_bind(char *s, int menu, int op, char *macro, char *descr);
-int km_dokey(int menu);
 
 void init_extended_keys(void);
 
@@ -45,7 +46,7 @@ void init_extended_keys(void);
 struct Keymap
 {
   char *macro;         /**< macro expansion (op == OP_MACRO) */
-  char *descr;         /**< description of a macro for the help menu */
+  char *desc;          /**< description of a macro for the help menu */
   struct Keymap *next; /**< next key in map */
   short op;            /**< operation to perform */
   short eq;            /**< number of leading keys equal to next entry */
@@ -53,48 +54,48 @@ struct Keymap
   keycode_t *keys;     /**< key sequence */
 };
 
-int km_expand_key(char *s, size_t len, struct Keymap *map);
-struct Keymap *km_find_func(int menu, int func);
-void km_init(void);
-void km_error_key(int menu);
-void mutt_what_key(void);
-
 /**
- * enum MenuTypes - Types of GUI selections
+ * enum MenuType - Types of GUI selections
  */
-enum MenuTypes
+enum MenuType
 {
-  MENU_ALIAS,
-  MENU_ATTACH,
-  MENU_COMPOSE,
-  MENU_EDITOR,
-  MENU_FOLDER,
-  MENU_GENERIC,
-  MENU_MAIN,
-  MENU_PAGER,
-  MENU_POST,
-  MENU_QUERY,
-
-  MENU_PGP,
-  MENU_SMIME,
-
+  MENU_ALIAS,            ///< Select an email address by its alias
+  MENU_ATTACH,           ///< Select an attachment
+  MENU_COMPOSE,          ///< Compose an email
+  MENU_EDITOR,           ///< Text entry area
+  MENU_FOLDER,           ///< General file/mailbox browser
+  MENU_GENERIC,          ///< Generic selection list
+  MENU_MAIN,             ///< Index panel (list of emails)
+  MENU_PAGER,            ///< Pager pager (email viewer)
+  MENU_POSTPONE,         ///< Select a postponed email
+  MENU_QUERY,            ///< Select from results of external query
+  MENU_PGP,              ///< PGP encryption menu
+  MENU_SMIME,            ///< SMIME encryption menu
 #ifdef CRYPT_BACKEND_GPGME
-  MENU_KEY_SELECT_PGP,
-  MENU_KEY_SELECT_SMIME,
+  MENU_KEY_SELECT_PGP,   ///< Select a PGP key
+  MENU_KEY_SELECT_SMIME, ///< Select a SMIME key
 #endif
-
 #ifdef MIXMASTER
-  MENU_MIX,
+  MENU_MIX,              ///< Create/edit a Mixmaster chain
 #endif
-
-  MENU_MAX
+#ifdef USE_AUTOCRYPT
+  MENU_AUTOCRYPT_ACCT,
+#endif
+  MENU_MAX,
 };
 
-/* the keymap trees (one for each menu) */
-extern struct Keymap *Keymaps[];
+int km_expand_key(char *s, size_t len, struct Keymap *map);
+struct Keymap *km_find_func(enum MenuType menu, int func);
+void km_init(void);
+void km_error_key(enum MenuType menu);
+void mutt_what_key(void);
 
-/* dokey() records the last real key pressed  */
-extern int LastKey;
+enum CommandResult km_bind(char *s, enum MenuType menu, int op, char *macro, char *desc);
+int km_dokey(enum MenuType menu);
+
+extern struct Keymap *Keymaps[]; ///< Array of Keymap keybindings, one for each Menu
+
+extern int LastKey; ///< Last real key pressed, recorded by dokey()
 
 extern const struct Mapping Menus[];
 
@@ -103,12 +104,13 @@ extern const struct Mapping Menus[];
  */
 struct Binding
 {
-  char *name; /**< name of the function */
-  int op;     /**< function id number */
-  char *seq;  /**< default key binding */
+  const char *name; /**< name of the function */
+  int op;           /**< function id number */
+  const char *seq;  /**< default key binding */
 };
 
-const struct Binding *km_get_table(int menu);
+const struct Binding *km_get_table(enum MenuType menu);
+const char *mutt_get_func(const struct Binding *bindings, int op);
 
 extern const struct Binding OpGeneric[];
 extern const struct Binding OpPost[];
@@ -129,6 +131,17 @@ extern const struct Binding OpSmime[];
 extern const struct Binding OpMix[];
 #endif
 
-void mutt_free_keys(void);
+#ifdef USE_AUTOCRYPT
+extern const struct Binding OpAutocryptAcct[];
+#endif
 
-#endif /* _MUTT_KEYMAP_H */
+void mutt_keys_free(void);
+
+enum CommandResult mutt_parse_bind(struct Buffer *buf, struct Buffer *s, unsigned long data, struct Buffer *err);
+enum CommandResult mutt_parse_exec(struct Buffer *buf, struct Buffer *s, unsigned long data, struct Buffer *err);
+enum CommandResult mutt_parse_macro(struct Buffer *buf, struct Buffer *s, unsigned long data, struct Buffer *err);
+enum CommandResult mutt_parse_push(struct Buffer *buf, struct Buffer *s, unsigned long data, struct Buffer *err);
+enum CommandResult mutt_parse_unbind(struct Buffer *buf, struct Buffer *s, unsigned long data, struct Buffer *err);
+enum CommandResult mutt_parse_unmacro(struct Buffer *buf, struct Buffer *s, unsigned long data, struct Buffer *err);
+
+#endif /* MUTT_KEYMAP_H */

@@ -20,12 +20,40 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _MUTT_BROWSER_H
-#define _MUTT_BROWSER_H
+#ifndef MUTT_BROWSER_H
+#define MUTT_BROWSER_H
 
+#include "config.h"
 #include <stdbool.h>
+#include <stdint.h>
 #include <sys/types.h>
 #include <time.h>
+
+struct Buffer;
+
+/* These Config Variables are only used in browser.c */
+extern bool  C_BrowserAbbreviateMailboxes;
+extern char *C_FolderFormat;
+extern char *C_GroupIndexFormat;
+extern char *C_NewsgroupsCharset;
+extern bool  C_ShowOnlyUnread;
+extern short C_SortBrowser;
+extern char *C_VfolderFormat;
+
+typedef uint8_t SelectFileFlags;  ///< Flags for mutt_select_file(), e.g. #MUTT_SEL_MAILBOX
+#define MUTT_SEL_NO_FLAGS      0  ///< No flags are set
+#define MUTT_SEL_MAILBOX (1 << 0) ///< Select a mailbox
+#define MUTT_SEL_MULTI   (1 << 1) ///< Multi-selection is enabled
+#define MUTT_SEL_FOLDER  (1 << 2) ///< Select a local directory
+
+/**
+ * struct Folder - A folder/dir in the browser
+ */
+struct Folder
+{
+  struct FolderFile *ff;
+  int num;
+};
 
 /**
  * struct FolderFile - Browser entry representing a folder/dir
@@ -42,9 +70,9 @@ struct FolderFile
   char *name;
   char *desc;
 
-  bool new;       /**< true if mailbox has "new mail" */
-  int msg_count;  /**< total number of messages */
-  int msg_unread; /**< number of unread messages */
+  bool has_new_mail; /**< true if mailbox has "new mail" */
+  int msg_count;     /**< total number of messages */
+  int msg_unread;    /**< number of unread messages */
 
 #ifdef USE_IMAP
   char delim;
@@ -53,12 +81,12 @@ struct FolderFile
   bool selectable : 1;
   bool inferiors : 1;
 #endif
-  bool has_buffy : 1;
-#ifdef USE_NNTP
-  struct NntpData *nd;
-#endif
+  bool has_mailbox : 1;
   bool local : 1; /**< folder is on local filesystem */
   bool tagged : 1;
+#ifdef USE_NNTP
+  struct NntpMboxData *nd;
+#endif
 };
 
 /**
@@ -78,4 +106,9 @@ struct BrowserState
 #endif
 };
 
-#endif /* _MUTT_BROWSER_H */
+void mutt_select_file(char *file, size_t filelen, SelectFileFlags flags, char ***files, int *numfiles);
+void mutt_buffer_select_file(struct Buffer *f, SelectFileFlags flags, char ***files, int *numfiles);
+void mutt_browser_select_dir(const char *f);
+void mutt_browser_cleanup(void);
+
+#endif /* MUTT_BROWSER_H */

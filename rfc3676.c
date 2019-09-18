@@ -23,6 +23,12 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/**
+ * @page rfc3676 RFC3676 Format Flowed routines
+ *
+ * RFC3676 Format Flowed routines
+ */
+
 #include "config.h"
 #include <limits.h>
 #include <stdbool.h>
@@ -30,14 +36,16 @@
 #include <string.h>
 #include <unistd.h>
 #include "mutt/mutt.h"
-#include "body.h"
+#include "email/lib.h"
+#include "curs_lib.h"
 #include "globals.h"
-#include "header.h"
-#include "mutt_curses.h"
 #include "mutt_window.h"
-#include "options.h"
-#include "protos.h"
+#include "muttlib.h"
 #include "state.h"
+
+/* These Config Variables are only used in rfc3676.c */
+bool C_ReflowSpaceQuotes; ///< Config: Insert spaces into reply quotes for 'format=flowed' messages
+short C_ReflowWrap; ///< Config: Maximum paragraph width for reformatting 'format=flowed' text
 
 #define FLOWED_MAX 72
 
@@ -48,15 +56,20 @@ struct FlowedState
 {
   size_t width;
   size_t spaces;
-  int delsp;
+  bool delsp;
 };
 
+/**
+ * get_quote_level - Get the quote level of a line
+ * @param line Text to examine
+ * @retval num Quote level
+ */
 static int get_quote_level(const char *line)
 {
   int quoted = 0;
-  char *p = (char *) line;
+  const char *p = line;
 
-  while (p && *p == '>')
+  while (p && (*p == '>'))
   {
     quoted++;
     p++;
@@ -67,6 +80,8 @@ static int get_quote_level(const char *line)
 
 /**
  * space_quotes - Should we add spaces between quote levels
+ * @param s State to use
+ * @retval true If spaces should be added
  *
  * Determines whether to add spacing between/after each quote level:
  * `   >>>foo`
@@ -75,17 +90,19 @@ static int get_quote_level(const char *line)
  */
 static int space_quotes(struct State *s)
 {
-  /* Allow quote spacing in the pager even for TextFlowed,
-   * but obviously not when replying.
-   */
-  if (TextFlowed && (s->flags & MUTT_REPLYING))
+  /* Allow quote spacing in the pager even for C_TextFlowed,
+   * but obviously not when replying.  */
+  if (C_TextFlowed && (s->flags & MUTT_REPLYING))
     return 0;
 
-  return ReflowSpaceQuotes;
+  return C_ReflowSpaceQuotes;
 }
 
 /**
  * add_quote_suffix - Should we add a trailing space to quotes
+ * @param s  State to use
+ * @param ql Quote level
+ * @retval true If spaces should be added
  *
  * Determines whether to add a trailing space to quotes:
  * `   >>> foo`
@@ -104,12 +121,19 @@ static bool add_quote_suffix(struct State *s, int ql)
     return false;
 
   /* The prefix will add its own space */
-  if (!TextFlowed && !ql && s->prefix)
+  if (!C_TextFlowed && !ql && s->prefix)
     return false;
 
   return true;
 }
 
+/**
+ * print_indent - Print indented text
+ * @param ql         Quote level
+ * @param s          State to work with
+ * @param add_suffix If true, write a trailing space character
+ * @retval num Number of characters written
+ */
 static size_t print_indent(int ql, struct State *s, int add_suffix)
 {
   size_t wid = 0;
@@ -117,9 +141,8 @@ static size_t print_indent(int ql, struct State *s, int add_suffix)
   if (s->prefix)
   {
     /* use given prefix only for format=fixed replies to format=flowed,
-     * for format=flowed replies to format=flowed, use '>' indentation
-     */
-    if (TextFlowed)
+     * for format=flowed replies to format=flowed, use '>' indentation */
+    if (C_TextFlowed)
       ql++;
     else
     {
@@ -139,9 +162,14 @@ static size_t print_indent(int ql, struct State *s, int add_suffix)
   if (space_quotes(s))
     ql *= 2;
 
-  return (ql + add_suffix + wid);
+  return ql + add_suffix + wid;
 }
 
+/**
+ * flush_par - Write out the paragraph
+ * @param s   State to work with
+ * @param fst The state of the flowed text
+ */
 static void flush_par(struct State *s, struct FlowedState *fst)
 {
   if (fst->width > 0)
@@ -154,14 +182,17 @@ static void flush_par(struct State *s, struct FlowedState *fst)
 
 /**
  * quote_width - Calculate the paragraph width based upon the quote level
+ * @param s  State to use
+ * @param ql Quote level
+ * @retval num Paragraph width
  *
  * The start of a quoted line will be ">>> ", so we need to subtract the space
  * required for the prefix from the terminal width.
  */
 static int quote_width(struct State *s, int ql)
 {
-  int width = mutt_window_wrap_cols(MuttIndexWindow, ReflowWrap);
-  if (TextFlowed && (s->flags & MUTT_REPLYING))
+  int width = mutt_window_wrap_cols(MuttIndexWindow->cols, C_ReflowWrap);
+  if (C_TextFlowed && (s->flags & MUTT_REPLYING))
   {
     /* When replying, force a wrap at FLOWED_MAX to comply with RFC3676
      * guidelines */
@@ -181,8 +212,16 @@ static int quote_width(struct State *s, int ql)
   return width;
 }
 
+/**
+ * print_flowed_line - Print a format-flowed line
+ * @param line Text to print
+ * @param s    State to work with
+ * @param ql   Quote level
+ * @param fst  The state of the flowed text
+ * @param term If true, terminate with a new line
+ */
 static void print_flowed_line(char *line, struct State *s, int ql,
-                              struct FlowedState *fst, int term)
+                              struct FlowedState *fst, bool term)
 {
   size_t width, w, words = 0;
   char *p = NULL;
@@ -200,17 +239,18 @@ static void print_flowed_line(char *line, struct State *s, int ql,
   width = quote_width(s, ql);
   last = line[mutt_str_strlen(line) - 1];
 
-  mutt_debug(4, "f=f: line [%s], width = %ld, spaces = %lu\n", line,
+  mutt_debug(LL_DEBUG5, "f=f: line [%s], width = %ld, spaces = %lu\n", line,
              (long) width, fst->spaces);
 
   for (words = 0; (p = strsep(&line, " "));)
   {
-    mutt_debug(4, "f=f: word [%s], width: %lu, remaining = [%s]\n", p, fst->width, line);
+    mutt_debug(LL_DEBUG5, "f=f: word [%s], width: %lu, remaining = [%s]\n", p,
+               fst->width, line);
 
     /* remember number of spaces */
     if (!*p)
     {
-      mutt_debug(4, "f=f: additional space\n");
+      mutt_debug(LL_DEBUG3, "f=f: additional space\n");
       fst->spaces++;
       continue;
     }
@@ -219,17 +259,17 @@ static void print_flowed_line(char *line, struct State *s, int ql,
       fst->spaces++;
 
     w = mutt_strwidth(p);
-    /* see if we need to break the line but make sure the first
-       word is put on the line regardless;
-       if for DelSp=yes only one trailing space is used, we probably
-       have a long word that we should break within (we leave that
-       up to the pager or user) */
-    if (!(!fst->spaces && fst->delsp && last != ' ') && w < width &&
-        w + fst->width + fst->spaces > width)
+    /* see if we need to break the line but make sure the first word is put on
+     * the line regardless; if for DelSp=yes only one trailing space is used,
+     * we probably have a long word that we should break within (we leave that
+     * up to the pager or user) */
+    if (!(!fst->spaces && fst->delsp && (last != ' ')) && (w < width) &&
+        (w + fst->width + fst->spaces > width))
     {
-      mutt_debug(4, "f=f: break line at %lu, %lu spaces left\n", fst->width, fst->spaces);
+      mutt_debug(LL_DEBUG3, "f=f: break line at %lu, %lu spaces left\n",
+                 fst->width, fst->spaces);
       /* only honor trailing spaces for format=flowed replies */
-      if (TextFlowed)
+      if (C_TextFlowed)
         for (; fst->spaces; fst->spaces--)
           state_putc(' ', s);
       state_putc('\n', s);
@@ -251,6 +291,13 @@ static void print_flowed_line(char *line, struct State *s, int ql,
     flush_par(s, fst);
 }
 
+/**
+ * print_fixed_line - Print a fixed format line
+ * @param line Text to print
+ * @param s    State to work with
+ * @param ql   Quote level
+ * @param fst  The state of the flowed text
+ */
 static void print_fixed_line(const char *line, struct State *s, int ql, struct FlowedState *fst)
 {
   print_indent(ql, s, add_quote_suffix(s, ql));
@@ -263,13 +310,14 @@ static void print_fixed_line(const char *line, struct State *s, int ql, struct F
 }
 
 /**
- * rfc3676_handler - body handler implementing RFC3676 for format=flowed
+ * rfc3676_handler - Body handler implementing RFC3676 for format=flowed - Implements ::handler_t
+ * @retval 0 Always
  */
 int rfc3676_handler(struct Body *a, struct State *s)
 {
   char *buf = NULL;
   unsigned int quotelevel = 0;
-  int delsp = 0;
+  bool delsp = false;
   size_t sz = 0;
   struct FlowedState fst = { 0 };
 
@@ -277,21 +325,20 @@ int rfc3676_handler(struct Body *a, struct State *s)
   char *t = mutt_param_get(&a->parameter, "delsp");
   if (t)
   {
-    delsp = mutt_str_strlen(t) == 3 && (mutt_str_strncasecmp(t, "yes", 3) == 0);
+    delsp = (mutt_str_strcasecmp(t, "yes") == 0);
     t = NULL;
-    fst.delsp = 1;
+    fst.delsp = true;
   }
 
-  mutt_debug(4, "f=f: DelSp: %s\n", delsp ? "yes" : "no");
+  mutt_debug(LL_DEBUG3, "f=f: DelSp: %s\n", delsp ? "yes" : "no");
 
-  while ((buf = mutt_file_read_line(buf, &sz, s->fpin, NULL, 0)))
+  while ((buf = mutt_file_read_line(buf, &sz, s->fp_in, NULL, 0)))
   {
     const size_t buf_len = mutt_str_strlen(buf);
     const unsigned int newql = get_quote_level(buf);
 
     /* end flowed paragraph (if we're within one) if quoting level
-     * changes (should not but can happen, see RFC3676, sec. 4.5.)
-     */
+     * changes (should not but can happen, see RFC3676, sec. 4.5.) */
     if (newql != quotelevel)
       flush_par(s, &fst);
 
@@ -307,7 +354,7 @@ int rfc3676_handler(struct Body *a, struct State *s)
 
     /* a fixed line either has no trailing space or is the
      * signature separator */
-    const int fixed = buf_len == buf_off || buf[buf_len - 1] != ' ' || sigsep;
+    const bool fixed = (buf_len == buf_off) || (buf[buf_len - 1] != ' ') || sigsep;
 
     /* print fixed-and-standalone, fixed-and-empty and sigsep lines as
      * fixed lines */
@@ -334,6 +381,7 @@ int rfc3676_handler(struct Body *a, struct State *s)
 
 /**
  * rfc3676_space_stuff - Perform required RFC3676 space stuffing
+ * @param e Email
  *
  * Space stuffing means that we have to add leading spaces to
  * certain lines:
@@ -347,53 +395,51 @@ int rfc3676_handler(struct Body *a, struct State *s)
  * freshly created copy in a tempfile and modifies the file's mtime so we don't
  * trigger code paths watching for mtime changes
  */
-void rfc3676_space_stuff(struct Header *hdr)
+void rfc3676_space_stuff(struct Email *e)
 {
   int lc = 0;
-  size_t len = 0;
   unsigned char c = '\0';
-  FILE *in = NULL, *out = NULL;
-  char buf[LONG_STRING];
+  char buf[1024];
   char tmpfile[PATH_MAX];
 
-  if (!hdr || !hdr->content || !hdr->content->filename)
+  if (!e || !e->content || !e->content->filename)
     return;
 
-  mutt_debug(2, "f=f: postprocess %s\n", hdr->content->filename);
+  mutt_debug(LL_DEBUG2, "f=f: postprocess %s\n", e->content->filename);
 
-  in = mutt_file_fopen(hdr->content->filename, "r");
-  if (!in)
+  FILE *fp_in = mutt_file_fopen(e->content->filename, "r");
+  if (!fp_in)
     return;
 
   mutt_mktemp(tmpfile, sizeof(tmpfile));
-  out = mutt_file_fopen(tmpfile, "w+");
-  if (!out)
+  FILE *fp_out = mutt_file_fopen(tmpfile, "w+");
+  if (!fp_out)
   {
-    mutt_file_fclose(&in);
+    mutt_file_fclose(&fp_in);
     return;
   }
 
-  while (fgets(buf, sizeof(buf), in))
+  while (fgets(buf, sizeof(buf), fp_in))
   {
-    if ((mutt_str_strncmp("From ", buf, 5) == 0) || buf[0] == ' ')
+    if ((buf[0] == ' ') || mutt_str_startswith(buf, "From ", CASE_MATCH))
     {
-      fputc(' ', out);
+      fputc(' ', fp_out);
       lc++;
-      len = mutt_str_strlen(buf);
+      size_t len = mutt_str_strlen(buf);
       if (len > 0)
       {
         c = buf[len - 1];
         buf[len - 1] = '\0';
       }
-      mutt_debug(4, "f=f: line %d needs space-stuffing: '%s'\n", lc, buf);
+      mutt_debug(LL_DEBUG5, "f=f: line %d needs space-stuffing: '%s'\n", lc, buf);
       if (len > 0)
         buf[len - 1] = c;
     }
-    fputs(buf, out);
+    fputs(buf, fp_out);
   }
-  mutt_file_fclose(&in);
-  mutt_file_fclose(&out);
-  mutt_file_set_mtime(hdr->content->filename, tmpfile);
-  unlink(hdr->content->filename);
-  mutt_str_replace(&hdr->content->filename, tmpfile);
+  mutt_file_fclose(&fp_in);
+  mutt_file_fclose(&fp_out);
+  mutt_file_set_mtime(e->content->filename, tmpfile);
+  unlink(e->content->filename);
+  mutt_str_replace(&e->content->filename, tmpfile);
 }

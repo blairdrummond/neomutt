@@ -3,6 +3,8 @@
  * Handling of personal config ('my' variables)
  *
  * @authors
+ * Copyright (C) 2018 Richard Russon <rich@flatcap.org>
+ *
  * @copyright
  * This program is free software: you can redistribute it and/or modify it under
  * the terms of the GNU General Public License as published by the Free Software
@@ -18,13 +20,28 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _MUTT_MYVAR_H
-#define _MUTT_MYVAR_H
+#ifndef MUTT_MYVAR_H
+#define MUTT_MYVAR_H
 
-#include <stddef.h>
+#include "mutt/mutt.h"
 
+/**
+ * struct MyVar - A user-set variable
+ */
+struct MyVar
+{
+  char *name;                 ///< Name of user variable
+  char *value;                ///< Value of user variable
+  TAILQ_ENTRY(MyVar) entries; ///< Linked list
+};
+TAILQ_HEAD(MyVarList, MyVar);
+
+extern struct MyVarList MyVars; ///< List of all the user's custom config variables
+
+void        myvar_del(const char *var);
 const char *myvar_get(const char *var);
-int var_to_string(int idx, char *val, size_t len);
-int mutt_option_index(const char *s);
+void        myvar_set(const char *var, const char *val);
 
-#endif /* _MUTT_MYVAR_H */
+void myvarlist_free(struct MyVarList *list);
+
+#endif /* MUTT_MYVAR_H */

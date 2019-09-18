@@ -35,18 +35,26 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/select.h>
 #include <sys/socket.h>
-#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#include "mutt/mutt.h"
+#include "address/lib.h"
+#include "conn/connaccount.h"
 #include "conn_globals.h"
 #include "connection.h"
+#include "curs_lib.h"
 #include "globals.h"
 #include "options.h"
-#include "protos.h"
+
+/* These Config Variables are only used in conn/conn_raw.c */
+#ifdef HAVE_GETADDRINFO
+bool C_UseIpv6; ///< Config: Lookup IPv6 addresses when making connections
+#endif
 
 /**
  * socket_connect - set up to connect to a socket fd
@@ -70,12 +78,12 @@ static int socket_connect(int fd, struct sockaddr *sa)
 #endif
   else
   {
-    mutt_debug(1, "Unknown address family!\n");
+    mutt_debug(LL_DEBUG1, "Unknown address family!\n");
     return -1;
   }
 
-  if (ConnectTimeout > 0)
-    alarm(ConnectTimeout);
+  if (C_ConnectTimeout > 0)
+    alarm(C_ConnectTimeout);
 
   mutt_sig_allow_interrupt(1);
 
@@ -90,11 +98,11 @@ static int socket_connect(int fd, struct sockaddr *sa)
   if (connect(fd, sa, sa_size) < 0)
   {
     save_errno = errno;
-    mutt_debug(2, "Connection failed. errno: %d...\n", errno);
+    mutt_debug(LL_DEBUG2, "Connection failed. errno: %d\n", errno);
     SigInt = 0; /* reset in case we caught SIGINTR while in connect() */
   }
 
-  if (ConnectTimeout > 0)
+  if (C_ConnectTimeout > 0)
     alarm(0);
   mutt_sig_allow_interrupt(0);
   sigprocmask(SIG_UNBLOCK, &set, NULL);
@@ -103,128 +111,7 @@ static int socket_connect(int fd, struct sockaddr *sa)
 }
 
 /**
- * raw_socket_close - Close a socket
- * @param conn Connection to a server
- * @retval  0 Success
- * @retval -1 Error, see errno
- */
-int raw_socket_close(struct Connection *conn)
-{
-  return close(conn->fd);
-}
-
-/**
- * raw_socket_read - Read data from a socket
- * @param conn Connection to a server
- * @param buf Buffer to store the data
- * @param len Number of bytes to read
- * @retval >0 Success, number of bytes read
- * @retval -1 Error, see errno
- */
-int raw_socket_read(struct Connection *conn, char *buf, size_t len)
-{
-  int rc;
-
-  mutt_sig_allow_interrupt(1);
-  rc = read(conn->fd, buf, len);
-  if (rc == -1)
-  {
-    mutt_error(_("Error talking to %s (%s)"), conn->account.host, strerror(errno));
-    SigInt = 0;
-  }
-  mutt_sig_allow_interrupt(0);
-
-  if (SigInt)
-  {
-    mutt_error(_("Connection to %s has been aborted"), conn->account.host);
-    SigInt = 0;
-    rc = -1;
-  }
-
-  return rc;
-}
-
-/**
- * raw_socket_write - Write data to a socket
- * @param conn Connection to a server
- * @param buf Buffer to read into
- * @param count Number of bytes to read
- * @retval >0 Success, number of bytes written
- * @retval -1 Error, see errno
- */
-int raw_socket_write(struct Connection *conn, const char *buf, size_t count)
-{
-  int rc;
-
-  mutt_sig_allow_interrupt(1);
-  rc = write(conn->fd, buf, count);
-  if (rc == -1)
-  {
-    mutt_error(_("Error talking to %s (%s)"), conn->account.host, strerror(errno));
-    SigInt = 0;
-  }
-  mutt_sig_allow_interrupt(0);
-
-  if (SigInt)
-  {
-    mutt_error(_("Connection to %s has been aborted"), conn->account.host);
-    SigInt = 0;
-    rc = -1;
-  }
-
-  return rc;
-}
-
-/**
- * raw_socket_poll - Checks whether reads would block
- * @param conn Connection to a server
- * @param wait_secs How long to wait for a response
- * @retval >0 There is data to read
- * @retval  0 Read would block
- * @retval -1 Connection doesn't support polling
- */
-int raw_socket_poll(struct Connection *conn, time_t wait_secs)
-{
-  fd_set rfds;
-  unsigned long wait_millis;
-  struct timeval tv, pre_t, post_t;
-
-  if (conn->fd < 0)
-    return -1;
-
-  wait_millis = wait_secs * 1000UL;
-
-  while (true)
-  {
-    tv.tv_sec = wait_millis / 1000;
-    tv.tv_usec = (wait_millis % 1000) * 1000;
-
-    FD_ZERO(&rfds);
-    FD_SET(conn->fd, &rfds);
-
-    gettimeofday(&pre_t, NULL);
-    const int rc = select(conn->fd + 1, &rfds, NULL, NULL, &tv);
-    gettimeofday(&post_t, NULL);
-
-    if (rc > 0 || (rc < 0 && errno != EINTR))
-      return rc;
-
-    if (SigInt)
-      mutt_query_exit();
-
-    wait_millis += (pre_t.tv_sec * 1000UL) + (pre_t.tv_usec / 1000);
-    const unsigned long post_t_millis = (post_t.tv_sec * 1000UL) + (post_t.tv_usec / 1000);
-    if (wait_millis <= post_t_millis)
-      return 0;
-    wait_millis -= post_t_millis;
-  }
-}
-
-/**
- * raw_socket_open - Open a socket
- * @param conn Connection to a server
- * @retval  0 Success
- * @retval -1 Error
+ * raw_socket_open - Open a socket - Implements Connection::conn_open()
  */
 int raw_socket_open(struct Connection *conn)
 {
@@ -244,7 +131,7 @@ int raw_socket_open(struct Connection *conn)
   /* we accept v4 or v6 STREAM sockets */
   memset(&hints, 0, sizeof(hints));
 
-  if (UseIpv6)
+  if (C_UseIpv6)
     hints.ai_family = AF_UNSPEC;
   else
     hints.ai_family = AF_INET;
@@ -282,7 +169,7 @@ int raw_socket_open(struct Connection *conn)
     mutt_message(_("Connecting to %s..."), conn->account.host);
 
   rc = -1;
-  for (cur = res; cur != NULL; cur = cur->ai_next)
+  for (cur = res; cur; cur = cur->ai_next)
   {
     int fd = socket(cur->ai_family, cur->ai_socktype, cur->ai_protocol);
     if (fd >= 0)
@@ -341,7 +228,7 @@ int raw_socket_open(struct Connection *conn)
     mutt_message(_("Connecting to %s..."), conn->account.host);
 
   rc = -1;
-  for (int i = 0; he->h_addr_list[i] != NULL; i++)
+  for (int i = 0; he->h_addr_list[i]; i++)
   {
     memcpy(&sin.sin_addr, he->h_addr_list[i], he->h_length);
     int fd = socket(PF_INET, SOCK_STREAM, IPPROTO_IP);
@@ -363,10 +250,118 @@ int raw_socket_open(struct Connection *conn)
 #endif
   if (rc)
   {
-    mutt_error(_("Could not connect to %s (%s)."), conn->account.host,
+    mutt_error(_("Could not connect to %s (%s)"), conn->account.host,
                (rc > 0) ? strerror(rc) : _("unknown error"));
     return -1;
   }
 
   return 0;
+}
+
+/**
+ * raw_socket_read - Read data from a socket - Implements Connection::conn_read()
+ */
+int raw_socket_read(struct Connection *conn, char *buf, size_t count)
+{
+  int rc;
+
+  mutt_sig_allow_interrupt(1);
+  do
+  {
+    rc = read(conn->fd, buf, count);
+  } while (rc < 0 && (errno == EINTR));
+
+  if (rc < 0)
+  {
+    mutt_error(_("Error talking to %s (%s)"), conn->account.host, strerror(errno));
+    SigInt = 0;
+  }
+  mutt_sig_allow_interrupt(0);
+
+  if (SigInt)
+  {
+    mutt_error(_("Connection to %s has been aborted"), conn->account.host);
+    SigInt = 0;
+    rc = -1;
+  }
+
+  return rc;
+}
+
+/**
+ * raw_socket_write - Write data to a socket - Implements Connection::conn_write()
+ */
+int raw_socket_write(struct Connection *conn, const char *buf, size_t count)
+{
+  int rc;
+  size_t sent = 0;
+
+  mutt_sig_allow_interrupt(1);
+  do
+  {
+    do
+    {
+      rc = write(conn->fd, buf + sent, count - sent);
+    } while (rc < 0 && (errno == EINTR));
+
+    if (rc < 0)
+    {
+      mutt_error(_("Error talking to %s (%s)"), conn->account.host, strerror(errno));
+      mutt_sig_allow_interrupt(0);
+      return -1;
+    }
+
+    sent += rc;
+  } while ((sent < count) && (SigInt == 0));
+
+  mutt_sig_allow_interrupt(0);
+  return sent;
+}
+
+/**
+ * raw_socket_poll - Checks whether reads would block - Implements Connection::conn_poll()
+ */
+int raw_socket_poll(struct Connection *conn, time_t wait_secs)
+{
+  fd_set rfds;
+  unsigned long wait_millis;
+  struct timeval tv;
+  size_t pre_t, post_t;
+
+  if (conn->fd < 0)
+    return -1;
+
+  wait_millis = wait_secs * 1000UL;
+
+  while (true)
+  {
+    tv.tv_sec = wait_millis / 1000;
+    tv.tv_usec = (wait_millis % 1000) * 1000;
+
+    FD_ZERO(&rfds);
+    FD_SET(conn->fd, &rfds);
+
+    pre_t = mutt_date_epoch_ms();
+    const int rc = select(conn->fd + 1, &rfds, NULL, NULL, &tv);
+    post_t = mutt_date_epoch_ms();
+
+    if ((rc > 0) || ((rc < 0) && (errno != EINTR)))
+      return rc;
+
+    if (SigInt)
+      mutt_query_exit();
+
+    wait_millis += pre_t;
+    if (wait_millis <= post_t)
+      return 0;
+    wait_millis -= post_t;
+  }
+}
+
+/**
+ * raw_socket_close - Close a socket - Implements Connection::conn_close()
+ */
+int raw_socket_close(struct Connection *conn)
+{
+  return close(conn->fd);
 }

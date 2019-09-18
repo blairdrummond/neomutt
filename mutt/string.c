@@ -4,6 +4,7 @@
  *
  * @authors
  * Copyright (C) 2017 Richard Russon <rich@flatcap.org>
+ * Copyright (C) 2019 Pietro Cerutti <gahr@gahr.ch>
  *
  * @copyright
  * This program is free software: you can redistribute it and/or modify it under
@@ -30,13 +31,16 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include "exit.h"
 #include "logging.h"
 #include "memory.h"
+#include "message.h"
 #include "string2.h"
 #ifdef HAVE_SYSEXITS_H
 #include <sysexits.h>
@@ -45,11 +49,13 @@
 /**
  * struct SysExits - Lookup table of error messages
  */
-static const struct SysExits
+struct SysExits
 {
-  int v;
-  const char *str;
-} sysexits_h[] = {
+  int err_num;
+  const char *err_str;
+};
+
+static const struct SysExits sysexits[] = {
 #ifdef EX_USAGE
   { 0xff & EX_USAGE, "Bad usage." },
 #endif
@@ -57,7 +63,7 @@ static const struct SysExits
   { 0xff & EX_DATAERR, "Data format error." },
 #endif
 #ifdef EX_NOINPUT
-  { 0xff & EX_NOINPUT, "Cannot open input." },
+  { 0xff & EX_NOINPUT, "Can't open input." },
 #endif
 #ifdef EX_NOUSER
   { 0xff & EX_NOUSER, "User unknown." },
@@ -96,25 +102,86 @@ static const struct SysExits
   { 0xff & EX_NOPERM, "Local configuration error." },
 #endif
   { S_ERR, "Exec error." },
-  { -1, NULL },
 };
 
 /**
  * mutt_str_sysexit - Return a string matching an error code
- * @param e Error code, e.g. EX_NOPERM
+ * @param err_num Error code, e.g. EX_NOPERM
  * @retval ptr string representing the error code
  */
-const char *mutt_str_sysexit(int e)
+const char *mutt_str_sysexit(int err_num)
 {
-  int i;
-
-  for (i = 0; sysexits_h[i].str; i++)
+  for (size_t i = 0; i < mutt_array_size(sysexits); i++)
   {
-    if (e == sysexits_h[i].v)
-      break;
+    if (err_num == sysexits[i].err_num)
+      return sysexits[i].err_str;
   }
 
-  return sysexits_h[i].str;
+  return NULL;
+}
+
+/**
+ * char_cmp_identity - Compare two characters
+ * @param a First character to compare
+ * @param b Second character to compare
+ * @retval true If (a == b)
+ */
+static inline bool char_cmp_identity(char a, char b)
+{
+  return a == b;
+}
+
+/**
+ * char_cmp_lower - Compare two characters ignoring case
+ * @param a First character to compare
+ * @param b Second character to compare
+ * @retval true If (a == b), ignoring case
+ */
+static inline bool char_cmp_lower(char a, char b)
+{
+  return tolower((unsigned char) a) == tolower((unsigned char) b);
+}
+
+/**
+ * char_cmp - Pointer to a function taking two characters and returning bool
+ */
+typedef bool (*char_cmp)(char, char);
+
+/**
+ * get_char_cmp - Retrieve the correct function to compare characters according to a case sensitivity setting
+ * @param cs Case sensitivity setting
+ * @retval ptr char_cmp function pointer
+ */
+static char_cmp get_char_cmp(enum CaseSensitivity cs)
+{
+  return (cs == CASE_IGNORE) ? char_cmp_lower : char_cmp_identity;
+}
+
+/**
+ * mutt_str_startswith - Check whether a string starts with a prefix
+ * @param str String to check
+ * @param prefix Prefix to match
+ * @param cs Case sensitivity setting
+ * @retval num Length of prefix if str starts with prefix
+ * @retval 0 if str does not start with prefix
+ */
+size_t mutt_str_startswith(const char *str, const char *prefix, enum CaseSensitivity cs)
+{
+  if (!str || (str[0] == '\0') || !prefix || (prefix[0] == '\0'))
+  {
+    return 0;
+  }
+
+  const char *saved_prefix = prefix;
+  for (char_cmp fn = get_char_cmp(cs); *str && *prefix; str++, prefix++)
+  {
+    if (!fn(*str, *prefix))
+    {
+      return 0;
+    }
+  }
+
+  return (!*prefix) ? prefix - saved_prefix : 0;
 }
 
 /**
@@ -130,23 +197,22 @@ const char *mutt_str_sysexit(int e)
  */
 int mutt_str_atol(const char *str, long *dst)
 {
-  long r;
-  long *res = dst ? dst : &r;
-  char *e = NULL;
+  if (dst)
+    *dst = 0;
 
-  /* no input: 0 */
-  if (!str || !*str)
-  {
-    *res = 0;
+  if (!str || !*str) /* no input: 0 */
     return 0;
-  }
 
+  char *e = NULL;
   errno = 0;
-  *res = strtol(str, &e, 10);
+
+  long res = strtol(str, &e, 10);
+  if (dst)
+    *dst = res;
+  if (((res == LONG_MIN) || (res == LONG_MAX)) && (errno == ERANGE))
+    return -2;
   if (e && (*e != '\0'))
     return -1;
-  if (errno == ERANGE)
-    return -2;
   return 0;
 }
 
@@ -165,20 +231,19 @@ int mutt_str_atol(const char *str, long *dst)
  */
 int mutt_str_atos(const char *str, short *dst)
 {
-  int rc;
-  long res;
-  short tmp;
-  short *t = dst ? dst : &tmp;
+  if (dst)
+    *dst = 0;
 
-  *t = 0;
-
-  rc = mutt_str_atol(str, &res);
+  long res = 0;
+  int rc = mutt_str_atol(str, &res);
   if (rc < 0)
     return rc;
-  if ((short) res != res)
+  if ((res < SHRT_MIN) || (res > SHRT_MAX))
     return -2;
 
-  *t = (short) res;
+  if (dst)
+    *dst = (short) res;
+
   return 0;
 }
 
@@ -196,20 +261,19 @@ int mutt_str_atos(const char *str, short *dst)
  */
 int mutt_str_atoi(const char *str, int *dst)
 {
-  int rc;
-  long res;
-  int tmp;
-  int *t = dst ? dst : &tmp;
+  if (dst)
+    *dst = 0;
 
-  *t = 0;
-
-  rc = mutt_str_atol(str, &res);
+  long res = 0;
+  int rc = mutt_str_atol(str, &res);
   if (rc < 0)
     return rc;
-  if ((int) res != res)
+  if ((res < INT_MIN) || (res > INT_MAX))
     return -2;
 
-  *t = (int) res;
+  if (dst)
+    *dst = (int) res;
+
   return 0;
 }
 
@@ -227,20 +291,19 @@ int mutt_str_atoi(const char *str, int *dst)
  */
 int mutt_str_atoui(const char *str, unsigned int *dst)
 {
-  int rc;
+  if (dst)
+    *dst = 0;
+
   unsigned long res = 0;
-  unsigned int tmp = 0;
-  unsigned int *t = dst ? dst : &tmp;
-
-  *t = 0;
-
-  rc = mutt_str_atoul(str, &res);
+  int rc = mutt_str_atoul(str, &res);
   if (rc < 0)
     return rc;
-  if ((unsigned int) res != res)
+  if (res > UINT_MAX)
     return -2;
 
-  *t = (unsigned int) res;
+  if (dst)
+    *dst = (unsigned int) res;
+
   return rc;
 }
 
@@ -257,20 +320,51 @@ int mutt_str_atoui(const char *str, unsigned int *dst)
  */
 int mutt_str_atoul(const char *str, unsigned long *dst)
 {
-  unsigned long r = 0;
-  unsigned long *res = dst ? dst : &r;
-  char *e = NULL;
+  if (dst)
+    *dst = 0;
 
-  /* no input: 0 */
-  if (!str || !*str)
-  {
-    *res = 0;
+  if (!str || !*str) /* no input: 0 */
     return 0;
-  }
 
+  char *e = NULL;
   errno = 0;
-  *res = strtoul(str, &e, 10);
-  if ((*res == ULONG_MAX) && (errno == ERANGE))
+
+  unsigned long res = strtoul(str, &e, 10);
+  if (dst)
+    *dst = res;
+  if ((res == ULONG_MAX) && (errno == ERANGE))
+    return -1;
+  if (e && (*e != '\0'))
+    return 1;
+  return 0;
+}
+
+/**
+ * mutt_str_atoull - Convert ASCII string to an unsigned long long
+ * @param[in]  str String to read
+ * @param[out] dst Store the result
+ * @retval  1 Successful conversion, with trailing characters
+ * @retval  0 Successful conversion
+ * @retval -1 Invalid input
+ *
+ * @note This function's return value differs from the other functions.
+ *       They return -1 if there is input beyond the number.
+ */
+int mutt_str_atoull(const char *str, unsigned long long *dst)
+{
+  if (dst)
+    *dst = 0;
+
+  if (!str || !*str) /* no input: 0 */
+    return 0;
+
+  char *e = NULL;
+  errno = 0;
+
+  unsigned long long res = strtoull(str, &e, 10);
+  if (dst)
+    *dst = res;
+  if ((res == ULLONG_MAX) && (errno == ERANGE))
     return -1;
   if (e && (*e != '\0'))
     return 1;
@@ -281,41 +375,38 @@ int mutt_str_atoul(const char *str, unsigned long *dst)
  * mutt_str_strdup - Copy a string, safely
  * @param str String to copy
  * @retval ptr  Copy of the string
- * @retval NULL if str was NULL
+ * @retval NULL if str was NULL or empty
  */
 char *mutt_str_strdup(const char *str)
 {
   if (!str || !*str)
     return NULL;
 
-  const size_t len = strlen(str) + 1;
-  char *copy = mutt_mem_malloc(len);
-  memcpy(copy, str, len);
-  return copy;
+  return strdup(str);
 }
 
 /**
  * mutt_str_strcat - Concatenate two strings
- * @param d Buffer containing source string
- * @param l Length of buffer
- * @param s String to add
- * @retval ptr Start of joined string
+ * @param buf    Buffer containing source string
+ * @param buflen Length of buffer
+ * @param s      String to add
+ * @retval ptr Start of the buffer
  */
-char *mutt_str_strcat(char *d, size_t l, const char *s)
+char *mutt_str_strcat(char *buf, size_t buflen, const char *s)
 {
-  char *p = d;
+  if (!buf || (buflen == 0) || !s)
+    return buf;
 
-  if (!l)
-    return d;
+  char *p = buf;
 
-  l--; /* Space for the trailing '\0'. */
+  buflen--; /* Space for the trailing '\0'. */
 
-  for (; *d && l; l--)
-    d++;
-  for (; *s && l; l--)
-    *d++ = *s++;
+  for (; (*buf != '\0') && buflen; buflen--)
+    buf++;
+  for (; *s && buflen; buflen--)
+    *buf++ = *s++;
 
-  *d = '\0';
+  *buf = '\0';
 
   return p;
 }
@@ -332,10 +423,10 @@ char *mutt_str_strcat(char *d, size_t l, const char *s)
  */
 char *mutt_str_strncat(char *d, size_t l, const char *s, size_t sl)
 {
-  char *p = d;
-
-  if (!l)
+  if (!d || (l == 0) || !s)
     return d;
+
+  char *p = d;
 
   l--; /* Space for the trailing '\0'. */
 
@@ -351,8 +442,8 @@ char *mutt_str_strncat(char *d, size_t l, const char *s, size_t sl)
 
 /**
  * mutt_str_replace - Replace one string with another
- * @param p String to replace
- * @param s New string
+ * @param[out] p String to replace
+ * @param[in]  s New string
  *
  * This function free()s the original string, strdup()s the new string and
  * overwrites the pointer to the first string.
@@ -361,37 +452,40 @@ char *mutt_str_strncat(char *d, size_t l, const char *s, size_t sl)
  */
 void mutt_str_replace(char **p, const char *s)
 {
+  if (!p)
+    return;
   FREE(p);
   *p = mutt_str_strdup(s);
 }
 
 /**
  * mutt_str_append_item - Add string to another separated by sep
- * @param str  String appended
- * @param item String to append
- * @param sep separator between string item
+ * @param[out] str  String appended
+ * @param[in]  item String to append
+ * @param[in]  sep separator between string item
  *
- * This function appends a string to another separate them by sep
- * if needed
+ * Append a string to another, separating them by sep if needed.
  *
  * This function alters the pointer of the caller.
  */
-void mutt_str_append_item(char **str, const char *item, int sep)
+void mutt_str_append_item(char **str, const char *item, char sep)
 {
-  char *p = NULL;
-  size_t sz = strlen(item);
-  size_t ssz = *str ? strlen(*str) : 0;
+  if (!str || !item)
+    return;
 
-  mutt_mem_realloc(str, ssz + ((ssz && sep) ? 1 : 0) + sz + 1);
-  p = *str + ssz;
-  if (sep && ssz)
+  size_t sz = mutt_str_strlen(item);
+  size_t ssz = mutt_str_strlen(*str);
+
+  mutt_mem_realloc(str, ssz + (((ssz > 0) && (sep != '\0')) ? 1 : 0) + sz + 1);
+  char *p = *str + ssz;
+  if ((ssz > 0) && (sep != '\0'))
     *p++ = sep;
   memcpy(p, item, sz + 1);
 }
 
 /**
  * mutt_str_adjust - Shrink-to-fit a string
- * @param p String to alter
+ * @param[out] p String to alter
  *
  * Take a string which is allocated on the heap, find its length and reallocate
  * the memory to be exactly the right size.
@@ -414,6 +508,9 @@ void mutt_str_adjust(char **p)
  */
 char *mutt_str_strlower(char *s)
 {
+  if (!s)
+    return NULL;
+
   char *p = s;
 
   while (*p)
@@ -440,29 +537,33 @@ char *mutt_str_strlower(char *s)
  */
 const char *mutt_str_strchrnul(const char *s, char c)
 {
+  if (!s)
+    return NULL;
+
   for (; *s && (*s != c); s++)
     ;
   return s;
 }
 
 /**
- * mutt_str_substr_cpy - Copy a sub-string into a buffer
- * @param dest    Buffer for the result
- * @param begin     Start of the string to copy
- * @param end     End of the string to copy
- * @param destlen Length of buffer
+ * mutt_str_substr_copy - Copy a sub-string into a buffer
+ * @param begin  Start of the string to copy
+ * @param end    End of the string to copy
+ * @param buf    Buffer for the result
+ * @param buflen Length of buffer
  * @retval ptr Destination buffer
  */
-char *mutt_str_substr_cpy(char *dest, const char *begin, const char *end, size_t destlen)
+char *mutt_str_substr_copy(const char *begin, const char *end, char *buf, size_t buflen)
 {
-  size_t len;
+  if (!begin || !end || !buf || (buflen == 0))
+    return buf;
 
-  len = end - begin;
-  if (len > (destlen - 1))
-    len = destlen - 1;
-  memcpy(dest, begin, len);
-  dest[len] = '\0';
-  return dest;
+  size_t len = end - begin;
+  if (len > (buflen - 1))
+    len = buflen - 1;
+  memcpy(buf, begin, len);
+  buf[len] = '\0';
+  return buf;
 }
 
 /**
@@ -482,7 +583,7 @@ char *mutt_str_substr_dup(const char *begin, const char *end)
 
   if (!begin)
   {
-    mutt_debug(1, "%s: ERROR: 'begin' is NULL\n", __func__);
+    mutt_debug(LL_DEBUG1, "%s: ERROR: 'begin' is NULL\n", __func__);
     return NULL;
   }
 
@@ -589,12 +690,12 @@ int mutt_str_strcoll(const char *a, const char *b)
  */
 const char *mutt_str_stristr(const char *haystack, const char *needle)
 {
-  const char *p = NULL, *q = NULL;
-
   if (!haystack)
     return NULL;
   if (!needle)
     return haystack;
+
+  const char *p = NULL, *q = NULL;
 
   while (*(p = haystack))
   {
@@ -616,10 +717,12 @@ const char *mutt_str_stristr(const char *haystack, const char *needle)
  * @retval ptr First non-whitespace character
  * @retval ptr Terminating NUL character, if the string was entirely whitespace
  */
-char *mutt_str_skip_whitespace(char *p)
+char *mutt_str_skip_whitespace(const char *p)
 {
+  if (!p)
+    return NULL;
   SKIPWS(p);
-  return p;
+  return (char *) p;
 }
 
 /**
@@ -630,7 +733,10 @@ char *mutt_str_skip_whitespace(char *p)
  */
 void mutt_str_remove_trailing_ws(char *s)
 {
-  for (char *p = s + mutt_str_strlen(s) - 1; (p >= s) && ISSPACE(*p); p--)
+  if (!s)
+    return;
+
+  for (char *p = s + mutt_str_strlen(s) - 1; (p >= s) && IS_SPACE(*p); p--)
     *p = '\0';
 }
 
@@ -656,7 +762,7 @@ size_t mutt_str_strfcpy(char *dest, const char *src, size_t dsize)
     *dest++ = *src++;
 
   *dest = '\0';
-  return (dest - dest0);
+  return dest - dest0;
 }
 
 /**
@@ -681,7 +787,7 @@ char *mutt_str_skip_email_wsp(const char *s)
  */
 bool mutt_str_is_email_wsp(char c)
 {
-  return c && (strchr(EMAIL_WSP, c) != NULL);
+  return c && (strchr(EMAIL_WSP, c));
 }
 
 /**
@@ -708,6 +814,9 @@ size_t mutt_str_strnfcpy(char *dest, const char *src, size_t n, size_t dsize)
  */
 size_t mutt_str_lws_len(const char *s, size_t n)
 {
+  if (!s)
+    return 0;
+
   const char *p = s;
   size_t len = n;
 
@@ -723,7 +832,7 @@ size_t mutt_str_lws_len(const char *s, size_t n)
     }
   }
 
-  if (len != 0 && strchr("\r\n", *(p - 1))) /* LWS doesn't end with CRLF */
+  if ((len != 0) && strchr("\r\n", *(p - 1))) /* LWS doesn't end with CRLF */
     len = 0;
   return len;
 }
@@ -739,6 +848,9 @@ size_t mutt_str_lws_len(const char *s, size_t n)
  */
 size_t mutt_str_lws_rlen(const char *s, size_t n)
 {
+  if (!s)
+    return 0;
+
   const char *p = s + n - 1;
   size_t len = n;
 
@@ -762,12 +874,15 @@ size_t mutt_str_lws_rlen(const char *s, size_t n)
 
 /**
  * mutt_str_dequote_comment - Un-escape characters in an email address comment
- * @param s String to the un-escaped
+ * @param s String to be un-escaped
  *
  * @note The string is changed in-place
  */
 void mutt_str_dequote_comment(char *s)
 {
+  if (!s)
+    return;
+
   char *w = s;
 
   for (; *s; s++)
@@ -800,7 +915,10 @@ void mutt_str_dequote_comment(char *s)
  */
 const char *mutt_str_next_word(const char *s)
 {
-  while (*s && !ISSPACE(*s))
+  if (!s)
+    return NULL;
+
+  while (*s && !IS_SPACE(*s))
     s++;
   SKIPWS(s);
   return s;
@@ -819,12 +937,15 @@ const char *mutt_str_next_word(const char *s)
  */
 const char *mutt_str_rstrnstr(const char *haystack, size_t haystack_length, const char *needle)
 {
+  if (!haystack || (haystack_length == 0) || !needle)
+    return NULL;
+
   int needle_length = strlen(needle);
   const char *haystack_end = haystack + haystack_length - needle_length;
 
   for (const char *p = haystack_end; p >= haystack; --p)
   {
-    for (size_t i = 0; i < needle_length; ++i)
+    for (size_t i = 0; i < needle_length; i++)
     {
       if (p[i] != needle[i])
         goto next;
@@ -851,12 +972,20 @@ const char *mutt_str_rstrnstr(const char *haystack, size_t haystack_length, cons
  */
 int mutt_str_word_casecmp(const char *a, const char *b)
 {
-  char tmp[SHORT_STRING] = "";
+  if (!b)
+  {
+    if (a)
+      return 1;
+    else
+      return 0;
+  }
+
+  char tmp[128] = { 0 };
 
   int i;
-  for (i = 0; i < (SHORT_STRING - 2); i++, b++)
+  for (i = 0; i < (sizeof(tmp) - 2); i++, b++)
   {
-    if (!*b || ISSPACE(*b))
+    if (!*b || IS_SPACE(*b))
     {
       tmp[i] = '\0';
       break;
@@ -870,26 +999,26 @@ int mutt_str_word_casecmp(const char *a, const char *b)
 
 /**
  * mutt_str_is_ascii - Is a string ASCII (7-bit)?
- * @param p   String to examine
- * @param len Length of string
+ * @param str String to examine
+ * @param len Length of string to examine
  * @retval true There are no 8-bit chars
  */
-bool mutt_str_is_ascii(const char *p, size_t len)
+bool mutt_str_is_ascii(const char *str, size_t len)
 {
-  const char *s = p;
-  while (s && (unsigned int) (s - p) < len)
-  {
-    if ((*s & 0x80) != 0)
+  if (!str)
+    return true;
+
+  for (; (*str != '\0') && (len > 0); str++, len--)
+    if ((*str & 0x80) != 0)
       return false;
-    s++;
-  }
+
   return true;
 }
 
 /**
- * mutt_str_find_word - Find the next word (non-space)
+ * mutt_str_find_word - Find the end of a word (non-space)
  * @param src String to search
- * @retval ptr Beginning of the next word
+ * @retval ptr End of the word
  *
  * Skip to the end of the current word.
  * Skip past any whitespace characters.
@@ -899,45 +1028,14 @@ bool mutt_str_is_ascii(const char *p, size_t len)
  */
 const char *mutt_str_find_word(const char *src)
 {
-  const char *p = src;
+  if (!src)
+    return NULL;
 
-  while (p && *p && strchr(" \t\n", *p))
-    p++;
-  while (p && *p && !strchr(" \t\n", *p))
-    p++;
-  return p;
-}
-
-/**
- * mutt_str_pretty_size - Display an abbreviated size, like 3.4K
- * @param buf    Buffer for the result
- * @param buflen Length of the buffer
- * @param num    Number to abbreviate
- */
-void mutt_str_pretty_size(char *buf, size_t buflen, size_t num)
-{
-  if (num < 1000)
-  {
-    snprintf(buf, buflen, "%d", (int) num);
-  }
-  else if (num < 10189) /* 0.1K - 9.9K */
-  {
-    snprintf(buf, buflen, "%3.1fK", num / 1024.0);
-  }
-  else if (num < 1023949) /* 10K - 999K */
-  {
-    /* 51 is magic which causes 10189/10240 to be rounded up to 10 */
-    snprintf(buf, buflen, "%zuK", (num + 51) / 1024);
-  }
-  else if (num < 10433332) /* 1.0M - 9.9M */
-  {
-    snprintf(buf, buflen, "%3.1fM", num / 1048576.0);
-  }
-  else /* 10M+ */
-  {
-    /* (10433332 + 52428) / 1048576 = 10 */
-    snprintf(buf, buflen, "%zuM", (num + 52428) / 1048576);
-  }
+  while (*src && strchr(" \t\n", *src))
+    src++;
+  while (*src && !strchr(" \t\n", *src))
+    src++;
+  return src;
 }
 
 /**
@@ -959,3 +1057,175 @@ const char *mutt_str_getenv(const char *name)
 
   return NULL;
 }
+
+/**
+ * mutt_str_inline_replace - Replace the beginning of a string
+ * @param buf    Buffer to modify
+ * @param buflen Length of buffer
+ * @param xlen   Length of string to overwrite
+ * @param rstr   Replacement string
+ * @retval true Success
+ *
+ * String (`XX<OOOOOO>......`, 16, 2, `RRRR`) becomes `RRRR<OOOOOO>....`
+ */
+bool mutt_str_inline_replace(char *buf, size_t buflen, size_t xlen, const char *rstr)
+{
+  if (!buf || !rstr || (xlen >= buflen))
+    return false;
+
+  size_t slen = mutt_str_strlen(buf + xlen);
+  size_t rlen = mutt_str_strlen(rstr);
+
+  if ((slen + rlen) >= buflen)
+    return false;
+
+  memmove(buf + rlen, buf + xlen, slen + 1);
+  memmove(buf, rstr, rlen);
+
+  return true;
+}
+
+/**
+ * mutt_str_remall_strcasestr - Remove all occurrences of substring, ignoring case
+ * @param str     String containing the substring
+ * @param target  Target substring for removal
+ * @retval 0 String contained substring and substring was removed successfully
+ * @retval 1 String did not contain substring
+ */
+int mutt_str_remall_strcasestr(char *str, const char *target)
+{
+  int rc = 1;
+
+  // Look through an ensure all instances of the substring are gone.
+  while ((str = (char *) mutt_str_strcasestr(str, target)))
+  {
+    size_t target_len = mutt_str_strlen(target);
+    memmove(str, str + target_len, 1 + strlen(str + target_len));
+    rc = 0; // If we got here, then a substring existed and has been removed.
+  }
+
+  return rc;
+}
+
+/**
+ * mutt_str_strcasestr - Find a substring within a string without worrying about case
+ * @param haystack String that may or may not contain the substring
+ * @param needle   Substring we're looking for
+ * @retval ptr  Beginning of substring
+ * @retval NULL Substring is not in substring
+ *
+ * This performs a byte-to-byte check so it will return unspecified
+ * results for multibyte locales.
+ */
+const char *mutt_str_strcasestr(const char *haystack, const char *needle)
+{
+  if (!needle)
+    return NULL;
+
+  size_t haystack_len = mutt_str_strlen(haystack);
+  size_t needle_len = mutt_str_strlen(needle);
+
+  // Empty string exists at the front of a string. Check strstr if you don't believe me.
+  if (needle_len == 0)
+    return haystack;
+
+  // Check size conditions. No point wasting CPU cycles.
+  if ((haystack_len == 0) || (haystack_len < needle_len))
+    return NULL;
+
+  // Only check space that needle could fit in.
+  // Conditional has + 1 to handle when the haystack and needle are the same length.
+  for (size_t i = 0; i < (haystack_len - needle_len) + 1; i++)
+  {
+    for (size_t j = 0; j < needle_len; j++)
+    {
+      if (tolower((unsigned char) haystack[i + j]) != tolower((unsigned char) needle[j]))
+        break;
+
+      // If this statement is true, the needle has been found.
+      if (j == (needle_len - 1))
+        return haystack + i;
+    }
+  }
+
+  return NULL;
+}
+
+#ifdef HAVE_VASPRINTF
+/**
+ * mutt_str_asprintf - Format a string, allocating space as necessary
+ * @param[out] strp New string saved here
+ * @param[in]  fmt  Format string
+ * @param[in]  ...  Format arguments
+ * @retval num Characters written
+ * @retval -1  Error
+ */
+int mutt_str_asprintf(char **strp, const char *fmt, ...)
+{
+  if (!strp || !fmt)
+    return -1;
+
+  va_list ap;
+  int n;
+
+  va_start(ap, fmt);
+  n = vasprintf(strp, fmt, ap);
+  va_end(ap);
+
+  /* GNU libc man page for vasprintf(3) states that the value of *strp
+   * is undefined when the return code is -1.  */
+  if (n < 0)
+  {
+    mutt_error(_("Out of memory")); /* LCOV_EXCL_LINE */
+    mutt_exit(1);                   /* LCOV_EXCL_LINE */
+  }
+
+  if (n == 0)
+  {
+    /* NeoMutt convention is to use NULL for 0-length strings */
+    FREE(strp);
+  }
+
+  return n;
+}
+#else
+/* Allocate a C-string large enough to contain the formatted string.
+ * This is essentially malloc+sprintf in one.
+ */
+int mutt_str_asprintf(char **strp, const char *fmt, ...)
+{
+  if (!strp || !fmt)
+    return -1;
+
+  int rlen = 256;
+
+  *strp = mutt_mem_malloc(rlen);
+  while (true)
+  {
+    va_list ap;
+    va_start(ap, fmt);
+    const int n = vsnprintf(*strp, rlen, fmt, ap);
+    va_end(ap);
+    if (n < 0)
+    {
+      FREE(strp);
+      return n;
+    }
+
+    if (n < rlen)
+    {
+      /* reduce space to just that which was used.  note that 'n' does not
+       * include the terminal nul char.  */
+      if (n == 0) /* convention is to use NULL for zero-length strings. */
+        FREE(strp);
+      else if (n != rlen - 1)
+        mutt_mem_realloc(strp, n + 1);
+      return n;
+    }
+    /* increase size and try again */
+    rlen = n + 1;
+    mutt_mem_realloc(strp, rlen);
+  }
+  /* not reached */
+}
+#endif /* HAVE_ASPRINTF */

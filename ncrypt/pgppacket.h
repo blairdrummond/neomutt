@@ -24,8 +24,8 @@
  * proper and the PGP public key ring lister.
  */
 
-#ifndef _NCRYPT_PGPPACKET_H
-#define _NCRYPT_PGPPACKET_H
+#ifndef MUTT_NCRYPT_PGPPACKET_H
+#define MUTT_NCRYPT_PGPPACKET_H
 
 #include <stdio.h>
 
@@ -34,26 +34,26 @@
  */
 enum PacketTags
 {
-  PT_RES0 = 0,   /**< reserved */
-  PT_ESK,        /**< Encrypted Session Key */
-  PT_SIG,        /**< Signature Packet */
-  PT_CESK,       /**< Conventionally Encrypted Session Key Packet */
-  PT_OPS,        /**< One-Pass Signature Packet */
-  PT_SECKEY,     /**< Secret Key Packet */
-  PT_PUBKEY,     /**< Public Key Packet */
-  PT_SUBSECKEY,  /**< Secret Subkey Packet */
-  PT_COMPRESSED, /**< Compressed Data Packet */
-  PT_SKE,        /**< Symmetrically Encrypted Data Packet */
-  PT_MARKER,     /**< Marker Packet */
-  PT_LITERAL,    /**< Literal Data Packet */
-  PT_TRUST,      /**< Trust Packet */
-  PT_NAME,       /**< Name Packet */
-  PT_SUBKEY,     /**< Subkey Packet */
-  PT_RES15,      /**< Reserved */
-  PT_COMMENT     /**< Comment Packet */
+  PT_RES0 = 0,   ///< reserved
+  PT_ESK,        ///< Encrypted Session Key
+  PT_SIG,        ///< Signature Packet
+  PT_CESK,       ///< Conventionally Encrypted Session Key Packet
+  PT_OPS,        ///< One-Pass Signature Packet
+  PT_SECKEY,     ///< Secret Key Packet
+  PT_PUBKEY,     ///< Public Key Packet
+  PT_SUBSECKEY,  ///< Secret Subkey Packet
+  PT_COMPRESSED, ///< Compressed Data Packet
+  PT_SKE,        ///< Symmetrically Encrypted Data Packet
+  PT_MARKER,     ///< Marker Packet
+  PT_LITERAL,    ///< Literal Data Packet
+  PT_TRUST,      ///< Trust Packet
+  PT_NAME,       ///< Name Packet
+  PT_SUBKEY,     ///< Subkey Packet
+  PT_RES15,      ///< Reserved
+  PT_COMMENT,    ///< Comment Packet
 };
 
 unsigned char *pgp_read_packet(FILE *fp, size_t *len);
 void pgp_release_packet(void);
 
-#endif /* _NCRYPT_PGPPACKET_H */
+#endif /* MUTT_NCRYPT_PGPPACKET_H */

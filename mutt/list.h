@@ -21,8 +21,8 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _MUTT_LIST_H
-#define _MUTT_LIST_H
+#ifndef MUTT_LIB_LIST_H
+#define MUTT_LIB_LIST_H
 
 #include <stdbool.h>
 #include "queue.h"
@@ -32,28 +32,26 @@
  */
 struct ListNode
 {
-    char *data;
-    STAILQ_ENTRY(ListNode) entries;
+  char *data;                     ///< String
+  STAILQ_ENTRY(ListNode) entries; ///< Linked list
 };
-
-/**
- * struct ListHead - A generic list of strings
- *
- * The List is stored as a STAILQ.
- * This means that insertions are quick at the head and tail of the list.
- */
 STAILQ_HEAD(ListHead, ListNode);
 
+/**
+ * typedef list_free_t - Prototype for a function to free List data
+ * @param[out] ptr Data to free
+ */
 typedef void (*list_free_t)(void **ptr);
 
 void             mutt_list_clear(struct ListHead *h);
-int              mutt_list_compare(const struct ListHead *ah, const struct ListHead *bh);
-struct ListNode *mutt_list_find(struct ListHead *h, const char *data);
+bool             mutt_list_compare(const struct ListHead *ah, const struct ListHead *bh);
+struct ListNode *mutt_list_find(const struct ListHead *h, const char *data);
 void             mutt_list_free(struct ListHead *h);
 void             mutt_list_free_type(struct ListHead *h, list_free_t fn);
 struct ListNode *mutt_list_insert_after(struct ListHead *h, struct ListNode *n, char *s);
 struct ListNode *mutt_list_insert_head(struct ListHead *h, char *s);
 struct ListNode *mutt_list_insert_tail(struct ListHead *h, char *s);
 bool             mutt_list_match(const char *s, struct ListHead *h);
+struct ListHead  mutt_list_str_split(const char *src, char sep);
 
-#endif /* _MUTT_LIST_H */
+#endif /* MUTT_LIB_LIST_H */

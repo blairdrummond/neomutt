@@ -20,18 +20,19 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _CONN_SSL_H
-#define _CONN_SSL_H
+#ifndef MUTT_CONN_SSL_H
+#define MUTT_CONN_SSL_H
 
-#ifdef USE_SSL
+#include "config.h"
+
 struct Connection;
 
+#ifdef USE_SSL
 int mutt_ssl_starttls(struct Connection *conn);
 int mutt_ssl_socket_setup(struct Connection *conn);
 #else
 /**
- * mutt_ssl_socket_setup - [Dummy] Set up the socket multiplexor
- * @param conn Connection
+ * [Dummy] Set up the socket multiplexor
  * @retval -1 Failure
  */
 static inline int mutt_ssl_socket_setup(struct Connection *conn)
@@ -40,4 +41,4 @@ static inline int mutt_ssl_socket_setup(struct Connection *conn)
 }
 #endif
 
-#endif /* _CONN_SSL_H */
+#endif /* MUTT_CONN_SSL_H */

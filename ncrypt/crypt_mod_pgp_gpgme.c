@@ -27,6 +27,7 @@
  */
 
 #include "config.h"
+#include <stdbool.h>
 #include <stdio.h>
 #include "crypt_gpgme.h"
 #include "crypt_mod.h"
@@ -46,13 +47,16 @@ static void pgp_gpgme_void_passphrase(void)
  *
  * This is handled by gpg-agent.
  */
-static int pgp_gpgme_valid_passphrase(void)
+static bool pgp_gpgme_valid_passphrase(void)
 {
-  return 1;
+  return true;
 }
 
 // clang-format off
-struct CryptModuleSpecs crypt_mod_pgp_gpgme = {
+/**
+ * CryptModPgpGpgme - GPGME PGP - Implements ::CryptModuleSpecs
+ */
+struct CryptModuleSpecs CryptModPgpGpgme = {
   APPLICATION_PGP,
 
   pgp_gpgme_init,

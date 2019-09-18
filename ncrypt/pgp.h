@@ -6,6 +6,7 @@
  * Copyright (C) 1996-1997 Michael R. Elkins <me@mutt.org>
  * Copyright (C) 1999-2003 Thomas Roessler <roessler@does-not-exist.org>
  * Copyright (C) 2004 g10 Code GmbH
+ * Copyright (C) 2019 Pietro Cerutti <gahr@gahr.ch>
  *
  * @copyright
  * This program is free software: you can redistribute it and/or modify it under
@@ -22,19 +23,16 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _NCRYPT_PGP_H
-#define _NCRYPT_PGP_H
-
-#ifdef CRYPT_BACKEND_CLASSIC_PGP
+#ifndef MUTT_NCRYPT_PGP_H
+#define MUTT_NCRYPT_PGP_H
 
 #include <stdbool.h>
 #include <stdio.h>
-#include <unistd.h>
 #include "ncrypt.h"
 
-struct Address;
+struct AddressList;
 struct Body;
-struct Header;
+struct Email;
 struct PgpKeyInfo;
 struct State;
 
@@ -48,23 +46,21 @@ char *pgp_short_keyid(struct PgpKeyInfo * k);
 char *pgp_long_keyid(struct PgpKeyInfo * k);
 char *pgp_fpr_or_lkeyid(struct PgpKeyInfo * k);
 
-int pgp_class_decrypt_mime(FILE *fpin, FILE **fpout, struct Body *b, struct Body **cur);
+int pgp_class_decrypt_mime(FILE *fp_in, FILE **fp_out, struct Body *b, struct Body **cur);
 
-char *pgp_class_find_keys(struct Address *addrlist, bool oppenc_mode);
+char *pgp_class_find_keys(struct AddressList *addrlist, bool oppenc_mode);
 
 int pgp_class_application_handler(struct Body *m, struct State *s);
 int pgp_class_encrypted_handler(struct Body *a, struct State *s);
 void pgp_class_extract_key_from_attachment(FILE *fp, struct Body *top);
 void pgp_class_void_passphrase(void);
-int pgp_class_valid_passphrase(void);
+bool pgp_class_valid_passphrase(void);
 
 int pgp_class_verify_one(struct Body *sigbdy, struct State *s, const char *tempfile);
-struct Body *pgp_class_traditional_encryptsign(struct Body *a, int flags, char *keylist);
+struct Body *pgp_class_traditional_encryptsign(struct Body *a, SecurityFlags flags, char *keylist);
 struct Body *pgp_class_encrypt_message(struct Body *a, char *keylist, bool sign);
 struct Body *pgp_class_sign_message(struct Body *a);
 
-int pgp_class_send_menu(struct Header *msg);
+int pgp_class_send_menu(struct Email *e);
 
-#endif /* CRYPT_BACKEND_CLASSIC_PGP */
-
-#endif /* _NCRYPT_PGP_H */
+#endif /* MUTT_NCRYPT_PGP_H */

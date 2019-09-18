@@ -29,7 +29,6 @@
 
 #include "config.h"
 #include <fcntl.h>
-#include <stdlib.h>
 #include <termios.h>
 #include <unistd.h>
 #include "mutt/mutt.h"
@@ -43,6 +42,10 @@
 #endif
 #endif
 
+/**
+ * mutt_get_winsize - Use an ioctl to get the window size
+ * @retval obj Window size
+ */
 struct winsize mutt_get_winsize(void)
 {
   struct winsize w = { 0 };
@@ -56,6 +59,9 @@ struct winsize mutt_get_winsize(void)
 }
 
 #ifdef USE_SLANG_CURSES
+/**
+ * mutt_resize_screen - Update NeoMutt's opinion about the window size (SLANG)
+ */
 void mutt_resize_screen(void)
 {
   struct winsize w = mutt_get_winsize();
@@ -86,6 +92,9 @@ void mutt_resize_screen(void)
   mutt_window_reflow();
 }
 #else
+/**
+ * mutt_resize_screen - Update NeoMutt's opinion about the window size (CURSES)
+ */
 void mutt_resize_screen(void)
 {
   struct winsize w = mutt_get_winsize();

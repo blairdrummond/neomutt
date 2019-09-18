@@ -22,18 +22,30 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _MUTT_SIDEBAR_H
-#define _MUTT_SIDEBAR_H
+#ifndef MUTT_SIDEBAR_H
+#define MUTT_SIDEBAR_H
 
-struct Buffy;
-struct Context;
+#include <stdbool.h>
+
+struct Mailbox;
+
+/* These Config Variables are only used in sidebar.c */
+extern short C_SidebarComponentDepth;
+extern char *C_SidebarDelimChars;
+extern char *C_SidebarDividerChar;
+extern bool  C_SidebarFolderIndent;
+extern char *C_SidebarFormat;
+extern char *C_SidebarIndentString;
+extern bool  C_SidebarNewMailOnly;
+extern bool  C_SidebarNonEmptyMailboxOnly;
+extern bool  C_SidebarNextNewWrap;
+extern bool  C_SidebarShortPath;
+extern short C_SidebarSortMethod;
 
 void mutt_sb_change_mailbox(int op);
 void mutt_sb_draw(void);
-const char *mutt_sb_get_highlight(void);
-void mutt_sb_notify_mailbox(struct Buffy *b, int created);
-void mutt_sb_set_buffystats(const struct Context *ctx);
-void mutt_sb_set_open_buffy(void);
-void mutt_sb_toggle_virtual(void);
+struct Mailbox *mutt_sb_get_highlight(void);
+void mutt_sb_notify_mailbox(struct Mailbox *m, bool created);
+void mutt_sb_set_open_mailbox(struct Mailbox *m);
 
-#endif /* _MUTT_SIDEBAR_H */
+#endif /* MUTT_SIDEBAR_H */

@@ -35,22 +35,30 @@
 #include <wctype.h>
 #include "mutt/mutt.h"
 #include "mutt.h"
+#include "alias.h"
+#include "browser.h"
+#include "context.h"
+#include "curs_lib.h"
 #include "enter_state.h"
 #include "globals.h"
-#include "history.h"
 #include "keymap.h"
 #include "mutt_curses.h"
+#include "mutt_history.h"
+#include "mutt_mailbox.h"
 #include "mutt_window.h"
+#include "muttlib.h"
 #include "opcodes.h"
 #include "protos.h"
+#include "query.h"
 
 /**
- * enum RedrawFlags - redraw flags for mutt_enter_string_full()
+ * enum EnterRedrawFlags - redraw flags for mutt_enter_string_full()
  */
-enum RedrawFlags
+enum EnterRedrawFlags
 {
-  MUTT_REDRAW_INIT = 1, /**< go to end of line and redraw */
-  MUTT_REDRAW_LINE      /**< redraw entire line */
+  ENTER_REDRAW_NONE = 0, ///< Nothing to redraw
+  ENTER_REDRAW_INIT,     ///< Go to end of line and redraw
+  ENTER_REDRAW_LINE,     ///< Redraw entire line
 };
 
 /* combining mark / non-spacing character */
@@ -65,7 +73,7 @@ enum RedrawFlags
 static int my_addwch(wchar_t wc)
 {
   int n = wcwidth(wc);
-  if (IsWPrint(wc) && n > 0)
+  if (IsWPrint(wc) && (n > 0))
     return mutt_addwch(wc);
   if (!(wc & ~0x7f))
     return printw("^%c", ((int) wc + 0x40) & 0x7f);
@@ -126,7 +134,7 @@ struct EnterState *mutt_enter_state_new(void)
  * @param buf    Buffer to store the string
  * @param buflen Buffer length
  * @param col    Initial cursor position
- * @param flags  Flags such as MUTT_FILE
+ * @param flags  Flags, see #CompletionFlags
  * @retval 0 if input was given
  * @retval -1 if abort
  *
@@ -135,7 +143,7 @@ struct EnterState *mutt_enter_state_new(void)
  * well, because there is no active menu for the built-in editor.
  * Most callers should prefer mutt_get_field() instead.
  */
-int mutt_enter_string(char *buf, size_t buflen, int col, int flags)
+int mutt_enter_string(char *buf, size_t buflen, int col, CompletionFlags flags)
 {
   int rc;
   struct EnterState *es = mutt_enter_state_new();
@@ -145,9 +153,9 @@ int mutt_enter_string(char *buf, size_t buflen, int col, int flags)
     {
       SigWinch = 0;
       mutt_resize_screen();
-      clearok(stdscr, TRUE);
+      clearok(stdscr, true);
     }
-    rc = mutt_enter_string_full(buf, buflen, col, flags, 0, NULL, NULL, es);
+    rc = mutt_enter_string_full(buf, buflen, col, flags, false, NULL, NULL, es);
   } while (rc == 1);
   mutt_enter_state_free(&es);
   return rc;
@@ -158,45 +166,43 @@ int mutt_enter_string(char *buf, size_t buflen, int col, int flags)
  * @param[in]  buf      Buffer to store the string
  * @param[in]  buflen   Buffer length
  * @param[in]  col      Initial cursor position
- * @param[in]  flags    Flags such as MUTT_FILE
+ * @param[in]  flags    Flags, see #CompletionFlags
  * @param[in]  multiple Allow multiple matches
  * @param[out] files    List of files selected
  * @param[out] numfiles Number of files selected
  * @param[out] state    Current state (if function is called repeatedly)
- * @retval 1  need to redraw the screen and call me again
- * @retval 0  if input was given
- * @retval -1 if abort
+ * @retval 1  Redraw the screen and call the function again
+ * @retval 0  Selection made
+ * @retval -1 Aborted
  */
-int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int multiple,
-                           char ***files, int *numfiles, struct EnterState *state)
+int mutt_enter_string_full(char *buf, size_t buflen, int col,
+                           CompletionFlags flags, bool multiple, char ***files,
+                           int *numfiles, struct EnterState *state)
 {
   int width = MuttMessageWindow->cols - col - 1;
-  int redraw;
-  int pass = (flags & MUTT_PASS);
-  int first = 1;
-  int ch, w, r;
-  size_t i;
+  enum EnterRedrawFlags redraw = ENTER_REDRAW_NONE;
+  bool pass = (flags & MUTT_PASS);
+  bool first = true;
+  int ch;
   wchar_t *tempbuf = NULL;
   size_t templen = 0;
   enum HistoryClass hclass;
-  wchar_t wc;
-  mbstate_t mbstate;
-
   int rc = 0;
+  mbstate_t mbstate;
   memset(&mbstate, 0, sizeof(mbstate));
 
   if (state->wbuf)
   {
     /* Coming back after return 1 */
-    redraw = MUTT_REDRAW_LINE;
-    first = 0;
+    redraw = ENTER_REDRAW_LINE;
+    first = false;
   }
   else
   {
     /* Initialise wbuf from buf */
     state->wbuflen = 0;
     state->lastchar = mutt_mb_mbstowcs(&state->wbuf, &state->wbuflen, 0, buf);
-    redraw = MUTT_REDRAW_INIT;
+    redraw = ENTER_REDRAW_INIT;
   }
 
   if (flags & MUTT_FILE)
@@ -216,9 +222,9 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
 
   while (true)
   {
-    if (redraw && !pass)
+    if (!pass)
     {
-      if (redraw == MUTT_REDRAW_INIT)
+      if (redraw == ENTER_REDRAW_INIT)
       {
         /* Go to end of line */
         state->curpos = state->lastchar;
@@ -226,16 +232,16 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
             state->wbuf, state->lastchar,
             mutt_mb_wcswidth(state->wbuf, state->lastchar) - width + 1);
       }
-      if (state->curpos < state->begin ||
-          mutt_mb_wcswidth(state->wbuf + state->begin, state->curpos - state->begin) >= width)
+      if ((state->curpos < state->begin) ||
+          (mutt_mb_wcswidth(state->wbuf + state->begin, state->curpos - state->begin) >= width))
       {
         state->begin = mutt_mb_width_ceiling(
             state->wbuf, state->lastchar,
-            mutt_mb_wcswidth(state->wbuf, state->curpos) - width / 2);
+            mutt_mb_wcswidth(state->wbuf, state->curpos) - (width / 2));
       }
       mutt_window_move(MuttMessageWindow, 0, col);
-      w = 0;
-      for (i = state->begin; i < state->lastchar; i++)
+      int w = 0;
+      for (size_t i = state->begin; i < state->lastchar; i++)
       {
         w += mutt_mb_wcwidth(state->wbuf[i]);
         if (w > width)
@@ -252,16 +258,16 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
     ch = km_dokey(MENU_EDITOR);
     if (ch < 0)
     {
-      rc = (SigWinch && ch == -2) ? 1 : -1;
+      rc = (SigWinch && (ch == -2)) ? 1 : -1;
       goto bye;
     }
 
     if (ch != OP_NULL)
     {
-      first = 0;
-      if (ch != OP_EDITOR_COMPLETE && ch != OP_EDITOR_COMPLETE_QUERY)
+      first = false;
+      if ((ch != OP_EDITOR_COMPLETE) && (ch != OP_EDITOR_COMPLETE_QUERY))
         state->tabs = 0;
-      redraw = MUTT_REDRAW_LINE;
+      redraw = ENTER_REDRAW_LINE;
       switch (ch)
       {
         case OP_EDITOR_HISTORY_UP:
@@ -272,7 +278,7 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
             mutt_hist_save_scratch(hclass, buf);
           }
           replace_part(state, 0, mutt_hist_prev(hclass));
-          redraw = MUTT_REDRAW_INIT;
+          redraw = ENTER_REDRAW_INIT;
           break;
 
         case OP_EDITOR_HISTORY_DOWN:
@@ -283,13 +289,13 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
             mutt_hist_save_scratch(hclass, buf);
           }
           replace_part(state, 0, mutt_hist_next(hclass));
-          redraw = MUTT_REDRAW_INIT;
+          redraw = ENTER_REDRAW_INIT;
           break;
 
         case OP_EDITOR_HISTORY_SEARCH:
           state->curpos = state->lastchar;
           mutt_mb_wcstombs(buf, buflen, state->wbuf, state->curpos);
-          mutt_history_complete(buf, buflen, hclass);
+          mutt_hist_complete(buf, buflen, hclass);
           replace_part(state, 0, buf);
           rc = 1;
           goto bye;
@@ -297,13 +303,19 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
 
         case OP_EDITOR_BACKSPACE:
           if (state->curpos == 0)
+          {
+            // Pressing backspace when no text is in the command prompt should exit the prompt
+            if (state->lastchar == 0)
+              goto bye;
+            // Pressing backspace with text in the command prompt should just beep
             BEEP();
+          }
           else
           {
-            i = state->curpos;
-            while (i && COMB_CHAR(state->wbuf[i - 1]))
+            size_t i = state->curpos;
+            while ((i > 0) && COMB_CHAR(state->wbuf[i - 1]))
               i--;
-            if (i)
+            if (i > 0)
               i--;
             memmove(state->wbuf + i, state->wbuf + state->curpos,
                     (state->lastchar - state->curpos) * sizeof(wchar_t));
@@ -317,11 +329,12 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
           break;
 
         case OP_EDITOR_EOL:
-          redraw = MUTT_REDRAW_INIT;
+          redraw = ENTER_REDRAW_INIT;
           break;
 
         case OP_EDITOR_KILL_LINE:
-          state->curpos = state->lastchar = 0;
+          state->curpos = 0;
+          state->lastchar = 0;
           break;
 
         case OP_EDITOR_KILL_EOL:
@@ -346,7 +359,7 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
           else
           {
             state->curpos++;
-            while (state->curpos < state->lastchar &&
+            while ((state->curpos < state->lastchar) &&
                    COMB_CHAR(state->wbuf[state->curpos]))
             {
               state->curpos++;
@@ -371,9 +384,12 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
             BEEP();
           else
           {
-            while (state->curpos < state->lastchar && iswspace(state->wbuf[state->curpos]))
+            while ((state->curpos < state->lastchar) &&
+                   iswspace(state->wbuf[state->curpos]))
+            {
               state->curpos++;
-            while (state->curpos < state->lastchar &&
+            }
+            while ((state->curpos < state->lastchar) &&
                    !iswspace(state->wbuf[state->curpos]))
             {
               state->curpos++;
@@ -391,9 +407,10 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
           }
           while (state->curpos && !iswspace(state->wbuf[state->curpos]))
             state->curpos--;
-          while (state->curpos < state->lastchar && iswspace(state->wbuf[state->curpos]))
+          while ((state->curpos < state->lastchar) && iswspace(state->wbuf[state->curpos]))
             state->curpos++;
-          while (state->curpos < state->lastchar && !iswspace(state->wbuf[state->curpos]))
+          while ((state->curpos < state->lastchar) &&
+                 !iswspace(state->wbuf[state->curpos]))
           {
             if (ch == OP_EDITOR_DOWNCASE_WORD)
               state->wbuf[state->curpos] = towlower(state->wbuf[state->curpos]);
@@ -412,12 +429,12 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
             BEEP();
           else
           {
-            i = state->curpos;
-            while (i < state->lastchar && COMB_CHAR(state->wbuf[i]))
+            size_t i = state->curpos;
+            while ((i < state->lastchar) && COMB_CHAR(state->wbuf[i]))
               i++;
             if (i < state->lastchar)
               i++;
-            while (i < state->lastchar && COMB_CHAR(state->wbuf[i]))
+            while ((i < state->lastchar) && COMB_CHAR(state->wbuf[i]))
               i++;
             memmove(state->wbuf + state->curpos, state->wbuf + i,
                     (state->lastchar - i) * sizeof(wchar_t));
@@ -429,10 +446,10 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
           /* delete to beginning of word */
           if (state->curpos != 0)
           {
-            i = state->curpos;
+            size_t i = state->curpos;
             while (i && iswspace(state->wbuf[i - 1]))
               i--;
-            if (i)
+            if (i > 0)
             {
               if (iswalnum(state->wbuf[i - 1]))
               {
@@ -450,9 +467,11 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
           break;
 
         case OP_EDITOR_KILL_EOW:
+        {
           /* delete to end of word */
 
           /* first skip over whitespace */
+          size_t i;
           for (i = state->curpos; (i < state->lastchar) && iswspace(state->wbuf[i]); i++)
             ;
 
@@ -477,13 +496,14 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
                   (state->lastchar - i) * sizeof(wchar_t));
           state->lastchar += state->curpos - i;
           break;
+        }
 
-        case OP_EDITOR_BUFFY_CYCLE:
+        case OP_EDITOR_MAILBOX_CYCLE:
           if (flags & MUTT_EFILE)
           {
-            first = 1; /* clear input if user types a real key later */
+            first = true; /* clear input if user types a real key later */
             mutt_mb_wcstombs(buf, buflen, state->wbuf, state->curpos);
-            mutt_buffy(buf, buflen);
+            mutt_mailbox_next(Context ? Context->mailbox : NULL, buf, buflen);
             state->curpos = state->lastchar =
                 mutt_mb_mbstowcs(&state->wbuf, &state->wbuflen, 0, buf);
             break;
@@ -499,17 +519,18 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
           state->tabs++;
           if (flags & MUTT_CMD)
           {
+            size_t i;
             for (i = state->curpos;
                  (i > 0) && !mutt_mb_is_shell_char(state->wbuf[i - 1]); i--)
             {
             }
             mutt_mb_wcstombs(buf, buflen, state->wbuf + i, state->curpos - i);
-            if (tempbuf && templen == state->lastchar - i &&
-                !memcmp(tempbuf, state->wbuf + i, (state->lastchar - i) * sizeof(wchar_t)))
+            if (tempbuf && (templen == (state->lastchar - i)) &&
+                (memcmp(tempbuf, state->wbuf + i, (state->lastchar - i) * sizeof(wchar_t)) == 0))
             {
-              mutt_select_file(buf, buflen,
-                               (flags & MUTT_EFILE) ? MUTT_SEL_FOLDER : 0, NULL, NULL);
-              if (*buf)
+              mutt_select_file(buf, buflen, (flags & MUTT_EFILE) ? MUTT_SEL_FOLDER : MUTT_SEL_NO_FLAGS,
+                               NULL, NULL);
+              if (buf[0] != '\0')
                 replace_part(state, i, buf);
               rc = 1;
               goto bye;
@@ -524,9 +545,10 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
 
             replace_part(state, i, buf);
           }
-          else if (flags & MUTT_ALIAS && ch == OP_EDITOR_COMPLETE)
+          else if ((flags & MUTT_ALIAS) && (ch == OP_EDITOR_COMPLETE))
           {
             /* invoke the alias-menu to get more addresses */
+            size_t i;
             for (i = state->curpos;
                  (i > 0) && (state->wbuf[i - 1] != ',') && (state->wbuf[i - 1] != ':'); i--)
             {
@@ -534,17 +556,18 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
             for (; (i < state->lastchar) && (state->wbuf[i] == ' '); i++)
               ;
             mutt_mb_wcstombs(buf, buflen, state->wbuf + i, state->curpos - i);
-            r = mutt_alias_complete(buf, buflen);
+            int rc2 = mutt_alias_complete(buf, buflen);
             replace_part(state, i, buf);
-            if (!r)
+            if (rc2 != 1)
             {
               rc = 1;
               goto bye;
             }
             break;
           }
-          else if (flags & MUTT_LABEL && ch == OP_EDITOR_COMPLETE)
+          else if ((flags & MUTT_LABEL) && (ch == OP_EDITOR_COMPLETE))
           {
+            size_t i;
             for (i = state->curpos;
                  (i > 0) && (state->wbuf[i - 1] != ',') && (state->wbuf[i - 1] != ':'); i--)
             {
@@ -552,17 +575,18 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
             for (; (i < state->lastchar) && (state->wbuf[i] == ' '); i++)
               ;
             mutt_mb_wcstombs(buf, buflen, state->wbuf + i, state->curpos - i);
-            r = mutt_label_complete(buf, buflen, state->tabs);
+            int rc2 = mutt_label_complete(buf, buflen, state->tabs);
             replace_part(state, i, buf);
-            if (!r)
+            if (rc2 != 1)
             {
               rc = 1;
               goto bye;
             }
             break;
           }
-          else if (flags & MUTT_PATTERN && ch == OP_EDITOR_COMPLETE)
+          else if ((flags & MUTT_PATTERN) && (ch == OP_EDITOR_COMPLETE))
           {
+            size_t i;
             for (i = state->curpos; (i > 0) && (state->wbuf[i - 1] != '~'); i--)
               ;
             if ((i > 0) && (i < state->curpos) && (state->wbuf[i - 1] == '~') &&
@@ -570,9 +594,9 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
             {
               i++;
               mutt_mb_wcstombs(buf, buflen, state->wbuf + i, state->curpos - i);
-              r = mutt_label_complete(buf, buflen, state->tabs);
+              int rc2 = mutt_label_complete(buf, buflen, state->tabs);
               replace_part(state, i, buf);
-              if (!r)
+              if (rc2 != 1)
               {
                 rc = 1;
                 goto bye;
@@ -582,9 +606,9 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
               goto self_insert;
             break;
           }
-          else if (flags & MUTT_ALIAS && ch == OP_EDITOR_COMPLETE_QUERY)
+          else if ((flags & MUTT_ALIAS) && (ch == OP_EDITOR_COMPLETE_QUERY))
           {
-            i = state->curpos;
+            size_t i = state->curpos;
             if (i != 0)
             {
               for (; (i > 0) && (state->wbuf[i - 1] != ','); i--)
@@ -603,10 +627,13 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
           else if (flags & MUTT_COMMAND)
           {
             mutt_mb_wcstombs(buf, buflen, state->wbuf, state->curpos);
-            i = strlen(buf);
-            if (i && buf[i - 1] == '=' && mutt_var_value_complete(buf, buflen, i))
+            size_t i = strlen(buf);
+            if ((i != 0) && (buf[i - 1] == '=') &&
+                (mutt_var_value_complete(buf, buflen, i) != 0))
+            {
               state->tabs = 0;
-            else if (!mutt_command_complete(buf, buflen, i, state->tabs))
+            }
+            else if (mutt_command_complete(buf, buflen, i, state->tabs) == 0)
               BEEP();
             replace_part(state, 0, buf);
           }
@@ -616,14 +643,14 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
 
             /* see if the path has changed from the last time */
             if ((!tempbuf && !state->lastchar) ||
-                (tempbuf && templen == state->lastchar &&
-                 !memcmp(tempbuf, state->wbuf, state->lastchar * sizeof(wchar_t))))
+                (tempbuf && (templen == state->lastchar) &&
+                 (memcmp(tempbuf, state->wbuf, state->lastchar * sizeof(wchar_t)) == 0)))
             {
               mutt_select_file(buf, buflen,
-                               ((flags & MUTT_EFILE) ? MUTT_SEL_FOLDER : 0) |
-                                   (multiple ? MUTT_SEL_MULTI : 0),
+                               ((flags & MUTT_EFILE) ? MUTT_SEL_FOLDER : MUTT_SEL_NO_FLAGS) |
+                                   (multiple ? MUTT_SEL_MULTI : MUTT_SEL_NO_FLAGS),
                                files, numfiles);
-              if (*buf)
+              if (buf[0] != '\0')
               {
                 mutt_pretty_mailbox(buf, buflen);
                 if (!pass)
@@ -651,8 +678,8 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
           else if (flags & MUTT_NM_QUERY)
           {
             mutt_mb_wcstombs(buf, buflen, state->wbuf, state->curpos);
-            i = strlen(buf);
-            if (!mutt_nm_query_complete(buf, buflen, i, state->tabs))
+            size_t len = strlen(buf);
+            if (!mutt_nm_query_complete(buf, buflen, len, state->tabs))
               BEEP();
 
             replace_part(state, 0, buf);
@@ -673,15 +700,18 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
 
         case OP_EDITOR_QUOTE_CHAR:
         {
-          struct Event event;
-          event = mutt_getch();
+          struct KeyEvent event;
+          do
+          {
+            event = mutt_getch();
+          } while (event.ch == -2);
           if (event.ch >= 0)
           {
             LastKey = event.ch;
             goto self_insert;
           }
+          break;
         }
-        break;
 
         case OP_EDITOR_TRANSPOSE_CHARS:
           if (state->lastchar < 2)
@@ -708,8 +738,8 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
     else
     {
     self_insert:
-
       state->tabs = 0;
+      wchar_t wc;
       /* use the raw keypress */
       ch = LastKey;
 
@@ -719,14 +749,11 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
 
       /* gather the octets into a wide character */
       {
-        char c;
-        size_t k;
-
-        c = ch;
-        k = mbrtowc(&wc, &c, 1, &mbstate);
+        char c = ch;
+        size_t k = mbrtowc(&wc, &c, 1, &mbstate);
         if (k == (size_t)(-2))
           continue;
-        else if (k && k != 1)
+        else if ((k != 0) && (k != 1))
         {
           memset(&mbstate, 0, sizeof(mbstate));
           continue;
@@ -735,12 +762,15 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
 
       if (first && (flags & MUTT_CLEAR))
       {
-        first = 0;
+        first = false;
         if (IsWPrint(wc)) /* why? */
-          state->curpos = state->lastchar = 0;
+        {
+          state->curpos = 0;
+          state->lastchar = 0;
+        }
       }
 
-      if (wc == '\r' || wc == '\n')
+      if ((wc == '\r') || (wc == '\n'))
       {
         /* Convert from wide characters */
         mutt_mb_wcstombs(buf, buflen, state->wbuf, state->lastchar);
@@ -759,7 +789,7 @@ int mutt_enter_string_full(char *buf, size_t buflen, int col, int flags, int mul
         rc = 0;
         goto bye;
       }
-      else if (wc && (wc < ' ' || IsWPrint(wc))) /* why? */
+      else if (wc && ((wc < ' ') || IsWPrint(wc))) /* why? */
       {
         if (state->lastchar >= state->wbuflen)
         {
@@ -788,13 +818,15 @@ bye:
 
 /**
  * mutt_enter_state_free - Free an EnterState
- * @param esp EnterState to free
+ * @param[out] ptr EnterState to free
  */
-void mutt_enter_state_free(struct EnterState **esp)
+void mutt_enter_state_free(struct EnterState **ptr)
 {
-  if (!esp)
+  if (!ptr || !*ptr)
     return;
 
-  FREE(&(*esp)->wbuf);
-  FREE(esp);
+  struct EnterState *es = *ptr;
+
+  FREE(&es->wbuf);
+  FREE(ptr);
 }

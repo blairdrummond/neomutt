@@ -30,6 +30,7 @@
 #include "config.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <stdbool.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -37,36 +38,32 @@
 #include "mutt/mutt.h"
 #include "mutt.h"
 #include "tunnel.h"
-#include "account.h"
 #include "conn_globals.h"
+#include "connaccount.h"
 #include "connection.h"
-#include "protos.h"
 #include "socket.h"
 
 /**
- * struct TunnelData - A network tunnel (pair of sockets)
+ * struct TunnelSockData - A network tunnel (pair of sockets)
  */
-struct TunnelData
+struct TunnelSockData
 {
   pid_t pid;
-  int readfd;
-  int writefd;
+  int fd_read;
+  int fd_write;
 };
 
 /**
- * tunnel_socket_open - Open a tunnel socket
- * @param conn Connection to a server
- * @retval  0 Success
- * @retval -1 Error
+ * tunnel_socket_open - Open a tunnel socket - Implements Connection::conn_open()
  */
 static int tunnel_socket_open(struct Connection *conn)
 {
   int pin[2], pout[2];
 
-  struct TunnelData *tunnel = mutt_mem_malloc(sizeof(struct TunnelData));
+  struct TunnelSockData *tunnel = mutt_mem_malloc(sizeof(struct TunnelSockData));
   conn->sockdata = tunnel;
 
-  mutt_message(_("Connecting with \"%s\"..."), Tunnel);
+  mutt_message(_("Connecting with \"%s\"..."), C_Tunnel);
 
   int rc = pipe(pin);
   if (rc == -1)
@@ -89,10 +86,10 @@ static int tunnel_socket_open(struct Connection *conn)
   int pid = fork();
   if (pid == 0)
   {
-    mutt_sig_unblock_system(0);
-    const int devnull = open("/dev/null", O_RDWR);
-    if (devnull < 0 || dup2(pout[0], STDIN_FILENO) < 0 ||
-        dup2(pin[1], STDOUT_FILENO) < 0 || dup2(devnull, STDERR_FILENO) < 0)
+    mutt_sig_unblock_system(false);
+    const int fd_null = open("/dev/null", O_RDWR);
+    if ((fd_null < 0) || (dup2(pout[0], STDIN_FILENO) < 0) ||
+        (dup2(pin[1], STDOUT_FILENO) < 0) || (dup2(fd_null, STDERR_FILENO) < 0))
     {
       _exit(127);
     }
@@ -100,15 +97,15 @@ static int tunnel_socket_open(struct Connection *conn)
     close(pin[1]);
     close(pout[0]);
     close(pout[1]);
-    close(devnull);
+    close(fd_null);
 
     /* Don't let the subprocess think it can use the controlling tty */
     setsid();
 
-    execle(EXECSHELL, "sh", "-c", Tunnel, NULL, mutt_envlist_getlist());
+    execle(EXEC_SHELL, "sh", "-c", C_Tunnel, NULL, mutt_envlist_getlist());
     _exit(127);
   }
-  mutt_sig_unblock_system(1);
+  mutt_sig_unblock_system(true);
 
   if (pid == -1)
   {
@@ -120,14 +117,14 @@ static int tunnel_socket_open(struct Connection *conn)
     FREE(&conn->sockdata);
     return -1;
   }
-  if (close(pin[1]) < 0 || close(pout[0]) < 0)
+  if ((close(pin[1]) < 0) || (close(pout[0]) < 0))
     mutt_perror("close");
 
   fcntl(pin[0], F_SETFD, FD_CLOEXEC);
   fcntl(pout[1], F_SETFD, FD_CLOEXEC);
 
-  tunnel->readfd = pin[0];
-  tunnel->writefd = pout[1];
+  tunnel->fd_read = pin[0];
+  tunnel->fd_write = pout[1];
   tunnel->pid = pid;
 
   conn->fd = 42; /* stupid hack */
@@ -136,18 +133,82 @@ static int tunnel_socket_open(struct Connection *conn)
 }
 
 /**
- * tunnel_socket_close - Close a tunnel socket
- * @param conn Connection to a server
- * @retval  0 Success
- * @retval -1 Error, see errno
+ * tunnel_socket_read - Read data from a tunnel socket - Implements Connection::conn_read()
+ */
+static int tunnel_socket_read(struct Connection *conn, char *buf, size_t count)
+{
+  struct TunnelSockData *tunnel = conn->sockdata;
+  int rc;
+
+  do
+  {
+    rc = read(tunnel->fd_read, buf, count);
+  } while (rc < 0 && errno == EINTR);
+
+  if (rc < 0)
+  {
+    mutt_error(_("Tunnel error talking to %s: %s"), conn->account.host, strerror(errno));
+    return -1;
+  }
+
+  return rc;
+}
+
+/**
+ * tunnel_socket_write - Write data to a tunnel socket - Implements Connection::conn_write()
+ */
+static int tunnel_socket_write(struct Connection *conn, const char *buf, size_t count)
+{
+  struct TunnelSockData *tunnel = conn->sockdata;
+  int rc;
+  size_t sent = 0;
+
+  do
+  {
+    do
+    {
+      rc = write(tunnel->fd_write, buf + sent, count - sent);
+    } while (rc < 0 && errno == EINTR);
+
+    if (rc < 0)
+    {
+      mutt_error(_("Tunnel error talking to %s: %s"), conn->account.host, strerror(errno));
+      return -1;
+    }
+
+    sent += rc;
+  } while (sent < count);
+
+  return sent;
+}
+
+/**
+ * tunnel_socket_poll - Checks whether tunnel reads would block - Implements Connection::conn_poll()
+ */
+static int tunnel_socket_poll(struct Connection *conn, time_t wait_secs)
+{
+  struct TunnelSockData *tunnel = conn->sockdata;
+  int ofd;
+  int rc;
+
+  ofd = conn->fd;
+  conn->fd = tunnel->fd_read;
+  rc = raw_socket_poll(conn, wait_secs);
+  conn->fd = ofd;
+
+  return rc;
+}
+
+/**
+ * tunnel_socket_close - Close a tunnel socket - Implements Connection::conn_close()
  */
 static int tunnel_socket_close(struct Connection *conn)
 {
-  struct TunnelData *tunnel = (struct TunnelData *) conn->sockdata;
+  struct TunnelSockData *tunnel = conn->sockdata;
   int status;
 
-  close(tunnel->readfd);
-  close(tunnel->writefd);
+  close(tunnel->fd_read);
+  close(tunnel->fd_write);
   waitpid(tunnel->pid, &status, 0);
   if (!WIFEXITED(status) || WEXITSTATUS(status))
   {
@@ -160,73 +221,7 @@ static int tunnel_socket_close(struct Connection *conn)
 }
 
 /**
- * tunnel_socket_read - Read data from a tunnel socket
- * @param conn Connection to a server
- * @param buf Buffer to store the data
- * @param len Number of bytes to read
- * @retval >0 Success, number of bytes read
- * @retval -1 Error, see errno
- */
-static int tunnel_socket_read(struct Connection *conn, char *buf, size_t len)
-{
-  struct TunnelData *tunnel = (struct TunnelData *) conn->sockdata;
-  int rc;
-
-  rc = read(tunnel->readfd, buf, len);
-  if (rc == -1)
-  {
-    mutt_error(_("Tunnel error talking to %s: %s"), conn->account.host, strerror(errno));
-  }
-
-  return rc;
-}
-
-/**
- * tunnel_socket_write - Write data to a tunnel socket
- * @param conn Connection to a server
- * @param buf  Buffer to read into
- * @param len  Number of bytes to read
- * @retval >0 Success, number of bytes written
- * @retval -1 Error, see errno
- */
-static int tunnel_socket_write(struct Connection *conn, const char *buf, size_t len)
-{
-  struct TunnelData *tunnel = (struct TunnelData *) conn->sockdata;
-  int rc;
-
-  rc = write(tunnel->writefd, buf, len);
-  if (rc == -1)
-  {
-    mutt_error(_("Tunnel error talking to %s: %s"), conn->account.host, strerror(errno));
-  }
-
-  return rc;
-}
-
-/**
- * tunnel_socket_poll - Checks whether tunnel reads would block
- * @param conn Connection to a server
- * @param wait_secs How long to wait for a response
- * @retval >0 There is data to read
- * @retval  0 Read would block
- * @retval -1 Connection doesn't support polling
- */
-static int tunnel_socket_poll(struct Connection *conn, time_t wait_secs)
-{
-  struct TunnelData *tunnel = (struct TunnelData *) conn->sockdata;
-  int ofd;
-  int rc;
-
-  ofd = conn->fd;
-  conn->fd = tunnel->readfd;
-  rc = raw_socket_poll(conn, wait_secs);
-  conn->fd = ofd;
-
-  return rc;
-}
-
-/**
- * mutt_tunnel_socket_setup - setups tunnel connection functions.
+ * mutt_tunnel_socket_setup - sets up tunnel connection functions
  * @param conn Connection to assign functions to
  *
  * Assign tunnel socket functions to the Connection conn.

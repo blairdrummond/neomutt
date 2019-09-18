@@ -20,24 +20,28 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _MUTT_REMAILER_H
-#define _MUTT_REMAILER_H
+#ifndef MUTT_REMAILER_H
+#define MUTT_REMAILER_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 struct ListHead;
-struct Header;
+struct Email;
 
-#ifdef MIXMASTER
+/* These Config Variables are only used in remailer.c */
+extern char *C_MixEntryFormat;
+extern char *C_Mixmaster;
 
+/* Mixmaster's maximum chain length.  Don't change this. */
+#define MAX_MIXES 19
+
+typedef uint8_t MixCapFlags;       ///< Flags, e.g. #MIX_CAP_NO_FLAGS
+#define MIX_CAP_NO_FLAGS        0  ///< No flags are set
 #define MIX_CAP_COMPRESS  (1 << 0)
 #define MIX_CAP_MIDDLEMAN (1 << 1)
 #define MIX_CAP_NEWSPOST  (1 << 2)
 #define MIX_CAP_NEWSMAIL  (1 << 3)
-
-/* Mixmaster's maximum chain length.  Don't change this. */
-
-#define MAXMIXES 19
 
 /**
  * struct Remailer - A Mixmaster remailer
@@ -48,7 +52,7 @@ struct Remailer
   char *shortname;
   char *addr;
   char *ver;
-  int caps;
+  MixCapFlags caps;
 };
 
 /**
@@ -57,13 +61,11 @@ struct Remailer
 struct MixChain
 {
   size_t cl;
-  int ch[MAXMIXES];
+  int ch[MAX_MIXES];
 };
 
 int mix_send_message(struct ListHead *chain, const char *tempfile);
-int mix_check_message(struct Header *msg);
+int mix_check_message(struct Email *e);
 void mix_make_chain(struct ListHead *chainhead);
 
-#endif /* MIXMASTER */
-
-#endif /* _MUTT_REMAILER_H */
+#endif /* MUTT_REMAILER_H */

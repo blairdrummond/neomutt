@@ -41,9 +41,8 @@
  */
 static void *hcache_gdbm_open(const char *path)
 {
-  int pagesize;
-
-  if (mutt_str_atoi(HeaderCachePagesize, &pagesize) < 0 || pagesize <= 0)
+  int pagesize = C_HeaderCachePagesize;
+  if (pagesize <= 0)
     pagesize = 16384;
 
   GDBM_FILE db = gdbm_open((char *) path, pagesize, GDBM_WRCREAT, 00600, NULL);
@@ -59,11 +58,11 @@ static void *hcache_gdbm_open(const char *path)
  */
 static void *hcache_gdbm_fetch(void *ctx, const char *key, size_t keylen)
 {
-  datum dkey;
-  datum data;
-
   if (!ctx)
     return NULL;
+
+  datum dkey;
+  datum data;
 
   GDBM_FILE db = ctx;
 
@@ -86,11 +85,11 @@ static void hcache_gdbm_free(void *vctx, void **data)
  */
 static int hcache_gdbm_store(void *ctx, const char *key, size_t keylen, void *data, size_t dlen)
 {
-  datum dkey;
-  datum databuf;
-
   if (!ctx)
     return -1;
+
+  datum dkey;
+  datum databuf;
 
   GDBM_FILE db = ctx;
 
@@ -104,14 +103,14 @@ static int hcache_gdbm_store(void *ctx, const char *key, size_t keylen, void *da
 }
 
 /**
- * hcache_gdbm_delete - Implements HcacheOps::delete()
+ * hcache_gdbm_delete_header - Implements HcacheOps::delete_header()
  */
-static int hcache_gdbm_delete(void *ctx, const char *key, size_t keylen)
+static int hcache_gdbm_delete_header(void *ctx, const char *key, size_t keylen)
 {
-  datum dkey;
-
   if (!ctx)
     return -1;
+
+  datum dkey;
 
   GDBM_FILE db = ctx;
 
@@ -124,13 +123,14 @@ static int hcache_gdbm_delete(void *ctx, const char *key, size_t keylen)
 /**
  * hcache_gdbm_close - Implements HcacheOps::close()
  */
-static void hcache_gdbm_close(void **ctx)
+static void hcache_gdbm_close(void **ptr)
 {
-  if (!ctx)
+  if (!ptr || !*ptr)
     return;
 
-  GDBM_FILE db = *ctx;
+  GDBM_FILE db = *ptr;
   gdbm_close(db);
+  *ptr = NULL;
 }
 
 /**

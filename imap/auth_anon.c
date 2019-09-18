@@ -31,63 +31,60 @@
 #include "mutt/mutt.h"
 #include "conn/conn.h"
 #include "auth.h"
-#include "globals.h"
 #include "mutt_account.h"
 #include "mutt_socket.h"
-#include "options.h"
-#include "protos.h"
 
 /**
  * imap_auth_anon - Authenticate anonymously
- * @param idata  Server data
+ * @param adata Imap Account data
  * @param method Name of this authentication method
- * @retval enum Result, e.g. #IMAP_AUTH_SUCCESS
+ * @retval #ImapAuthRes Result, e.g. #IMAP_AUTH_SUCCESS
  *
  * this is basically a stripped-down version of the cram-md5 method.
  */
-enum ImapAuthRes imap_auth_anon(struct ImapData *idata, const char *method)
+enum ImapAuthRes imap_auth_anon(struct ImapAccountData *adata, const char *method)
 {
   int rc;
 
-  if (!mutt_bit_isset(idata->capabilities, AUTH_ANON))
+  if (!(adata->capabilities & IMAP_CAP_AUTH_ANONYMOUS))
     return IMAP_AUTH_UNAVAIL;
 
-  if (mutt_account_getuser(&idata->conn->account) < 0)
+  if (mutt_account_getuser(&adata->conn->account) < 0)
     return IMAP_AUTH_FAILURE;
 
-  if (idata->conn->account.user[0] != '\0')
+  if (adata->conn->account.user[0] != '\0')
     return IMAP_AUTH_UNAVAIL;
 
   mutt_message(_("Authenticating (anonymous)..."));
 
-  imap_cmd_start(idata, "AUTHENTICATE ANONYMOUS");
+  imap_cmd_start(adata, "AUTHENTICATE ANONYMOUS");
 
   do
-    rc = imap_cmd_step(idata);
-  while (rc == IMAP_CMD_CONTINUE);
+    rc = imap_cmd_step(adata);
+  while (rc == IMAP_RES_CONTINUE);
 
-  if (rc != IMAP_CMD_RESPOND)
+  if (rc != IMAP_RES_RESPOND)
   {
-    mutt_debug(1, "Invalid response from server.\n");
+    mutt_debug(LL_DEBUG1, "Invalid response from server\n");
     goto bail;
   }
 
-  mutt_socket_send(idata->conn, "ZHVtbXkK\r\n"); /* base64 ("dummy") */
+  mutt_socket_send(adata->conn, "ZHVtbXkK\r\n"); /* base64 ("dummy") */
 
   do
-    rc = imap_cmd_step(idata);
-  while (rc == IMAP_CMD_CONTINUE);
+    rc = imap_cmd_step(adata);
+  while (rc == IMAP_RES_CONTINUE);
 
-  if (rc != IMAP_CMD_OK)
+  if (rc != IMAP_RES_OK)
   {
-    mutt_debug(1, "Error receiving server response.\n");
+    mutt_debug(LL_DEBUG1, "Error receiving server response\n");
     goto bail;
   }
 
-  if (imap_code(idata->buf))
+  if (imap_code(adata->buf))
     return IMAP_AUTH_SUCCESS;
 
 bail:
-  mutt_error(_("Anonymous authentication failed."));
+  mutt_error(_("Anonymous authentication failed"));
   return IMAP_AUTH_FAILURE;
 }

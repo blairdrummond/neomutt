@@ -20,12 +20,14 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _MUTT_LUA_H
-#define _MUTT_LUA_H
+#ifndef MUTT_MUTT_LUA_H
+#define MUTT_MUTT_LUA_H
+
+#include "mutt_commands.h"
 
 struct Buffer;
 
-int mutt_lua_parse(struct Buffer *tmp, struct Buffer *s, unsigned long data, struct Buffer *err);
-int mutt_lua_source_file(struct Buffer *tmp, struct Buffer *s, unsigned long data, struct Buffer *err);
+enum CommandResult mutt_lua_parse(struct Buffer *tmp, struct Buffer *s, unsigned long data, struct Buffer *err);
+enum CommandResult mutt_lua_source_file(struct Buffer *tmp, struct Buffer *s, unsigned long data, struct Buffer *err);
 
-#endif /* _MUTT_LUA_H */
+#endif /* MUTT_MUTT_LUA_H */

@@ -21,11 +21,12 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _MUTT_HASH_H
-#define _MUTT_HASH_H
+#ifndef MUTT_LIB_HASH_H
+#define MUTT_LIB_HASH_H
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 /**
  * union HashKey - The data item stored in a HashElem
@@ -46,41 +47,48 @@ struct HashElem
   struct HashElem *next;
 };
 
-typedef void (*hash_destructor)(int type, void *obj, intptr_t data);
+/**
+ * typedef hashelem_free_t - Prototype for Hash Destructor callback function
+ * @param type Hash Type
+ * @param obj  Object to free
+ * @param data Data associated with the Hash
+ */
+typedef void (*hashelem_free_t)(int type, void *obj, intptr_t data);
 
 /**
  * struct Hash - A Hash Table
  */
 struct Hash
 {
-  size_t nelem;
-  bool strdup_keys : 1; /**< if set, the key->strkey is strdup'ed */
-  bool allow_dups  : 1; /**< if set, duplicate keys are allowed */
-  struct HashElem **table;
-  size_t (*gen_hash)(union HashKey, size_t);
-  int (*cmp_key)(union HashKey, union HashKey);
-  hash_destructor destroy;
-  intptr_t dest_data;
+  size_t nelem;                                 ///< Number of elements in the Hash table
+  bool strdup_keys : 1;                         ///< if set, the key->strkey is strdup'ed
+  bool allow_dups  : 1;                         ///< if set, duplicate keys are allowed
+  struct HashElem **table;                      ///< Array of Hash keys
+  size_t (*gen_hash)(union HashKey, size_t);    ///< Function to generate hash id from the key
+  int (*cmp_key)(union HashKey, union HashKey); ///< Function to compare two Hash keys
+  intptr_t hdata;                               ///< Data to pass to the free_hdata() function
+  hashelem_free_t free_hdata;                   ///< Function to free a Hash element
 };
 
-/* flags for mutt_hash_create() */
-#define MUTT_HASH_STRCASECMP  (1 << 0) /**< use strcasecmp() to compare keys */
-#define MUTT_HASH_STRDUP_KEYS (1 << 1) /**< make a copy of the keys */
-#define MUTT_HASH_ALLOW_DUPS  (1 << 2) /**< allow duplicate keys to be inserted */
+typedef uint8_t HashFlags;             ///< Flags for mutt_hash_new(), e.g. #MUTT_HASH_STRCASECMP
+#define MUTT_HASH_NO_FLAGS          0  ///< No flags are set
+#define MUTT_HASH_STRCASECMP  (1 << 0) ///< use strcasecmp() to compare keys
+#define MUTT_HASH_STRDUP_KEYS (1 << 1) ///< make a copy of the keys
+#define MUTT_HASH_ALLOW_DUPS  (1 << 2) ///< allow duplicate keys to be inserted
 
-struct Hash *    mutt_hash_create(size_t nelem, int flags);
 void             mutt_hash_delete(struct Hash *table, const char *strkey, const void *data);
-void             mutt_hash_destroy(struct Hash **ptr);
 struct HashElem *mutt_hash_find_bucket(const struct Hash *table, const char *strkey);
 void *           mutt_hash_find(const struct Hash *table, const char *strkey);
 struct HashElem *mutt_hash_find_elem(const struct Hash *table, const char *strkey);
+void             mutt_hash_free(struct Hash **ptr);
 struct HashElem *mutt_hash_insert(struct Hash *table, const char *strkey, void *data);
-void             mutt_hash_set_destructor(struct Hash *table, hash_destructor fn, intptr_t fn_data);
-struct HashElem *mutt_hash_typed_insert(struct Hash *table, const char *strkey, int type, void *data);
-struct Hash *    mutt_hash_int_create(size_t nelem, int flags);
 void             mutt_hash_int_delete(struct Hash *table, unsigned int intkey, const void *data);
 void *           mutt_hash_int_find(const struct Hash *table, unsigned int intkey);
 struct HashElem *mutt_hash_int_insert(struct Hash *table, unsigned int intkey, void *data);
+struct Hash *    mutt_hash_int_new(size_t nelem, HashFlags flags);
+struct Hash *    mutt_hash_new(size_t nelem, HashFlags flags);
+void             mutt_hash_set_destructor(struct Hash *table, hashelem_free_t fn, intptr_t fn_data);
+struct HashElem *mutt_hash_typed_insert(struct Hash *table, const char *strkey, int type, void *data);
 
 /**
  * struct HashWalkState - Cursor to iterate through a Hash Table
@@ -93,4 +101,4 @@ struct HashWalkState
 
 struct HashElem *mutt_hash_walk(const struct Hash *table, struct HashWalkState *state);
 
-#endif /* _MUTT_HASH_H */
+#endif /* MUTT_LIB_HASH_H */

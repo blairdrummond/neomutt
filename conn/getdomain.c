@@ -32,30 +32,28 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
-#include "mutt/logging.h"
-#include "mutt/memory.h"
-#include "mutt/string2.h"
+#include "mutt/mutt.h"
 
 /**
  * getdnsdomainname - Lookup the host's name using DNS
- * @param d   Buffer for the result
- * @param len Length of the buffer
+ * @param buf    Buffer for the result
+ * @param buflen Length of the buffer
  * @retval  0 Success
  * @retval -1 Error
  */
-int getdnsdomainname(char *d, size_t len)
+int getdnsdomainname(char *buf, size_t buflen)
 {
   int rc = -1;
 
 #if defined(HAVE_GETADDRINFO) || defined(HAVE_GETADDRINFO_A)
-  char node[STRING];
+  char node[256];
   if (gethostname(node, sizeof(node)) != 0)
     return rc;
 
   struct addrinfo hints;
   struct addrinfo *h = NULL;
 
-  *d = '\0';
+  *buf = '\0';
   memset(&hints, 0, sizeof(struct addrinfo));
   hints.ai_flags = AI_CANONNAME;
   hints.ai_family = AF_UNSPEC;
@@ -64,8 +62,7 @@ int getdnsdomainname(char *d, size_t len)
 
   /* Allow 0.1 seconds to get the FQDN (fully-qualified domain name).
    * If it takes longer, the system is mis-configured and the network is not
-   * working properly, so...
-   */
+   * working properly, so...  */
   struct timespec timeout = { 0, 100000000 };
   struct gaicb *reqs[1];
   reqs[0] = mutt_mem_calloc(1, sizeof(*reqs[0]));
@@ -79,7 +76,7 @@ int getdnsdomainname(char *d, size_t len)
       h = reqs[0]->ar_result;
     else if (status == EAI_INPROGRESS)
     {
-      mutt_debug(1, "timeout\n");
+      mutt_debug(LL_DEBUG1, "timeout\n");
       /* request is not finish, cancel it to free it safely */
       if (gai_cancel(reqs[0]) == EAI_NOTCANCELED)
       {
@@ -88,24 +85,24 @@ int getdnsdomainname(char *d, size_t len)
       }
     }
     else
-      mutt_debug(1, "fail: (%d) %s\n", status, gai_strerror(status));
+      mutt_debug(LL_DEBUG1, "fail: (%d) %s\n", status, gai_strerror(status));
   }
   FREE(&reqs[0]);
 
 #else /* !HAVE_GETADDRINFO_A */
 
-  mutt_debug(3, "before getaddrinfo\n");
+  mutt_debug(LL_DEBUG3, "before getaddrinfo\n");
   getaddrinfo(node, NULL, &hints, &h);
-  mutt_debug(3, "after getaddrinfo\n");
+  mutt_debug(LL_DEBUG3, "after getaddrinfo\n");
 
 #endif
 
   char *p = NULL;
-  if (h != NULL && h->ai_canonname && (p = strchr(h->ai_canonname, '.')))
+  if (h && h->ai_canonname && (p = strchr(h->ai_canonname, '.')))
   {
-    mutt_str_strfcpy(d, ++p, len);
+    mutt_str_strfcpy(buf, ++p, buflen);
     rc = 0;
-    mutt_debug(1, "Hostname: %s\n", d);
+    mutt_debug(LL_DEBUG1, "Hostname: %s\n", buf);
     freeaddrinfo(h);
   }
 

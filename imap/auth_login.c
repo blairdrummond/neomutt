@@ -27,62 +27,55 @@
  */
 
 #include "config.h"
+#include <stdbool.h>
 #include <stdio.h>
 #include "imap_private.h"
 #include "mutt/mutt.h"
 #include "conn/conn.h"
-#include "mutt.h"
 #include "auth.h"
-#include "globals.h"
 #include "mutt_account.h"
 #include "mutt_logging.h"
-#include "mutt_socket.h"
-#include "options.h"
-#include "protos.h"
 
 /**
  * imap_auth_login - Plain LOGIN support
- * @param idata  Server data
+ * @param adata Imap Account data
  * @param method Name of this authentication method
- * @retval enum Result, e.g. #IMAP_AUTH_SUCCESS
+ * @retval #ImapAuthRes Result, e.g. #IMAP_AUTH_SUCCESS
  */
-enum ImapAuthRes imap_auth_login(struct ImapData *idata, const char *method)
+enum ImapAuthRes imap_auth_login(struct ImapAccountData *adata, const char *method)
 {
-  char q_user[SHORT_STRING], q_pass[SHORT_STRING];
-  char buf[STRING];
-  int rc;
+  char q_user[256], q_pass[256];
+  char buf[1024];
 
-  if (mutt_bit_isset(idata->capabilities, LOGINDISABLED))
+  if ((adata->capabilities & IMAP_CAP_LOGINDISABLED))
   {
-    mutt_message(_("LOGIN disabled on this server."));
+    mutt_message(_("LOGIN disabled on this server"));
     return IMAP_AUTH_UNAVAIL;
   }
 
-  if (mutt_account_getuser(&idata->conn->account) < 0)
+  if (mutt_account_getuser(&adata->conn->account) < 0)
     return IMAP_AUTH_FAILURE;
-  if (mutt_account_getpass(&idata->conn->account) < 0)
+  if (mutt_account_getpass(&adata->conn->account) < 0)
     return IMAP_AUTH_FAILURE;
 
   mutt_message(_("Logging in..."));
 
-  imap_quote_string(q_user, sizeof(q_user), idata->conn->account.user);
-  imap_quote_string(q_pass, sizeof(q_pass), idata->conn->account.pass);
+  imap_quote_string(q_user, sizeof(q_user), adata->conn->account.user, false);
+  imap_quote_string(q_pass, sizeof(q_pass), adata->conn->account.pass, false);
 
   /* don't print the password unless we're at the ungodly debugging level
    * of 5 or higher */
 
-  if (DebugLevel < IMAP_LOG_PASS)
-    mutt_debug(2, "Sending LOGIN command for %s...\n", idata->conn->account.user);
+  if (C_DebugLevel < IMAP_LOG_PASS)
+    mutt_debug(LL_DEBUG2, "Sending LOGIN command for %s\n", adata->conn->account.user);
 
   snprintf(buf, sizeof(buf), "LOGIN %s %s", q_user, q_pass);
-  rc = imap_exec(idata, buf, IMAP_CMD_FAIL_OK | IMAP_CMD_PASS);
-
-  if (!rc)
+  if (imap_exec(adata, buf, IMAP_CMD_PASS) == IMAP_EXEC_SUCCESS)
   {
     mutt_clear_error(); /* clear "Logging in...".  fixes #3524 */
     return IMAP_AUTH_SUCCESS;
   }
 
-  mutt_error(_("Login failed."));
+  mutt_error(_("Login failed"));
   return IMAP_AUTH_FAILURE;
 }

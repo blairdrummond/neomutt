@@ -27,10 +27,9 @@
  */
 
 #include "config.h"
+#include <stdbool.h>
 #include <string.h>
-#include "imap_private.h"
 #include "mutt/mutt.h"
-#include "globals.h"
 
 // clang-format off
 /**
@@ -94,7 +93,7 @@ static char *utf7_to_utf8(const char *u7, size_t u7len, char **u8, size_t *u8len
       u7++;
       u7len--;
 
-      if (u7len && *u7 == '-')
+      if (u7len && (*u7 == '-'))
       {
         *p++ = '&';
         continue;
@@ -104,7 +103,7 @@ static char *utf7_to_utf8(const char *u7, size_t u7len, char **u8, size_t *u8len
       k = 10;
       for (; u7len; u7++, u7len--)
       {
-        if ((*u7 & 0x80) || (b = Index64u[(int) *u7]) == -1)
+        if ((*u7 & 0x80) || ((b = Index64u[(int) *u7]) == -1))
           break;
         if (k > 0)
         {
@@ -116,7 +115,7 @@ static char *utf7_to_utf8(const char *u7, size_t u7len, char **u8, size_t *u8len
           ch |= b >> (-k);
           if (ch < 0x80)
           {
-            if (0x20 <= ch && ch < 0x7f)
+            if ((0x20 <= ch) && (ch < 0x7f))
             {
               /* Printable US-ASCII */
               goto bail;
@@ -138,23 +137,23 @@ static char *utf7_to_utf8(const char *u7, size_t u7len, char **u8, size_t *u8len
           k += 10;
         }
       }
-      if (ch || k < 6)
+      if (ch || (k < 6))
       {
         /* Non-zero or too many extra bits */
         goto bail;
       }
-      if (!u7len || *u7 != '-')
+      if (!u7len || (*u7 != '-'))
       {
         /* BASE64 not properly terminated */
         goto bail;
       }
-      if (u7len > 2 && u7[1] == '&' && u7[2] != '-')
+      if ((u7len > 2) && (u7[1] == '&') && (u7[2] != '-'))
       {
         /* Adjacent BASE64 sections */
         goto bail;
       }
     }
-    else if (*u7 < 0x20 || *u7 >= 0x7f)
+    else if ((*u7 < 0x20) || (*u7 >= 0x7f))
     {
       /* Not printable US-ASCII */
       goto bail;
@@ -196,10 +195,8 @@ static char *utf8_to_utf7(const char *u8, size_t u8len, char **u7, size_t *u7len
   int n, b = 0, k = 0;
   bool base64 = false;
 
-  /*
-   * In the worst case we convert 2 chars to 7 chars. For example:
-   * "\x10&\x10&..." -> "&ABA-&-&ABA-&-...".
-   */
+  /* In the worst case we convert 2 chars to 7 chars. For example:
+   * "\x10&\x10&..." -> "&ABA-&-&ABA-&-...".  */
   char *buf = mutt_mem_malloc((u8len / 2) * 7 + 6);
   char *p = buf;
 
@@ -252,12 +249,12 @@ static char *utf8_to_utf7(const char *u8, size_t u8len, char **u7, size_t *u7len
         goto bail;
       ch = (ch << 6) | (u8[i] & 0x3f);
     }
-    if (n > 1 && !(ch >> (n * 5 + 1)))
+    if ((n > 1) && !(ch >> (n * 5 + 1)))
       goto bail;
     u8 += n;
     u8len -= n;
 
-    if (ch < 0x20 || ch >= 0x7f)
+    if ((ch < 0x20) || (ch >= 0x7f))
     {
       if (!base64)
       {
@@ -312,48 +309,57 @@ bail:
 
 /**
  * imap_utf_encode - Encode email from local charset to UTF-8
- * @param idata Server data
- * @param s     Email to convert
+ * @param[in]  unicode true if Unicode is allowed
+ * @param[out] s       Email to convert
  */
-void imap_utf_encode(struct ImapData *idata, char **s)
+void imap_utf_encode(bool unicode, char **s)
 {
-  if (!Charset || !s)
+  if (!C_Charset || !s || !*s)
     return;
 
-  char *t = mutt_str_strdup(*s);
-  if (t && (mutt_ch_convert_string(&t, Charset, "utf-8", 0) == 0))
+  if (unicode && mutt_ch_is_utf8(C_Charset))
+  {
+    return;
+  }
+
+  if (mutt_ch_convert_string(s, C_Charset, "utf-8", 0) != 0)
   {
     FREE(s);
-    if (idata->unicode)
-      *s = mutt_str_strdup(t);
-    else
-      *s = utf8_to_utf7(t, strlen(t), NULL, 0);
+    return;
   }
-  FREE(&t);
+
+  if (!unicode)
+  {
+    char *utf7 = utf8_to_utf7(*s, strlen(*s), NULL, 0);
+    FREE(s);
+    *s = utf7;
+  }
 }
 
 /**
  * imap_utf_decode - Decode email from UTF-8 to local charset
- * @param[in]  idata Server data
- * @param[out] s     Email to convert
+ * @param[in]  unicode true if Unicode is allowed
+ * @param[out] s       Email to convert
  */
-void imap_utf_decode(struct ImapData *idata, char **s)
+void imap_utf_decode(bool unicode, char **s)
 {
-  if (!Charset)
+  if (!C_Charset || !s || !*s)
     return;
 
-  char *t = NULL;
+  if (unicode && mutt_ch_is_utf8(C_Charset))
+  {
+    return;
+  }
 
-  if (idata->unicode)
-    t = mutt_str_strdup(*s);
-  else
-    t = utf7_to_utf8(*s, strlen(*s), 0, 0);
+  if (!unicode)
+  {
+    char *utf8 = utf7_to_utf8(*s, strlen(*s), 0, 0);
+    FREE(s);
+    *s = utf8;
+  }
 
-  if (t && mutt_ch_convert_string(&t, "utf-8", Charset, 0) == 0)
+  if (mutt_ch_convert_string(s, "utf-8", C_Charset, 0) != 0)
   {
     FREE(s);
-    *s = t;
   }
-  else
-    FREE(&t);
 }

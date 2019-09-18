@@ -35,7 +35,7 @@
 #include <stdio.h>
 #include "mutt/mutt.h"
 #include "backend.h"
-#include "options.h"
+#include "globals.h"
 
 /**
  * hcache_kyotocabinet_open - Implements HcacheOps::open()
@@ -46,7 +46,7 @@ static void *hcache_kyotocabinet_open(const char *path)
   int printfresult;
 
   printfresult = snprintf(kcdbpath, sizeof(kcdbpath), "%s#type=kct#opts=%s#rcomp=lex",
-                          path, HeaderCacheCompress ? "lc" : "l");
+                          path, C_HeaderCacheCompress ? "lc" : "l");
   if ((printfresult < 0) || (printfresult >= sizeof(kcdbpath)))
   {
     return NULL;
@@ -61,7 +61,8 @@ static void *hcache_kyotocabinet_open(const char *path)
   else
   {
     int ecode = kcdbecode(db);
-    mutt_debug(2, "kcdbopen failed for %s: %s (ecode %d)\n", kcdbpath, kcdbemsg(db), ecode);
+    mutt_debug(LL_DEBUG2, "kcdbopen failed for %s: %s (ecode %d)\n", kcdbpath,
+               kcdbemsg(db), ecode);
     kcdbdel(db);
     return NULL;
   }
@@ -109,9 +110,9 @@ static int hcache_kyotocabinet_store(void *ctx, const char *key, size_t keylen,
 }
 
 /**
- * hcache_kyotocabinet_delete - Implements HcacheOps::delete()
+ * hcache_kyotocabinet_delete_header - Implements HcacheOps::delete_header()
  */
-static int hcache_kyotocabinet_delete(void *ctx, const char *key, size_t keylen)
+static int hcache_kyotocabinet_delete_header(void *ctx, const char *key, size_t keylen)
 {
   if (!ctx)
     return -1;
@@ -128,18 +129,19 @@ static int hcache_kyotocabinet_delete(void *ctx, const char *key, size_t keylen)
 /**
  * hcache_kyotocabinet_close - Implements HcacheOps::close()
  */
-static void hcache_kyotocabinet_close(void **ctx)
+static void hcache_kyotocabinet_close(void **ptr)
 {
-  if (!ctx || !*ctx)
+  if (!ptr || !*ptr)
     return;
 
-  KCDB *db = *ctx;
+  KCDB *db = *ptr;
   if (!kcdbclose(db))
   {
     int ecode = kcdbecode(db);
-    mutt_debug(2, "kcdbclose failed: %s (ecode %d)\n", kcdbemsg(db), ecode);
+    mutt_debug(LL_DEBUG2, "kcdbclose failed: %s (ecode %d)\n", kcdbemsg(db), ecode);
   }
   kcdbdel(db);
+  *ptr = NULL;
 }
 
 /**
@@ -147,9 +149,8 @@ static void hcache_kyotocabinet_close(void **ctx)
  */
 static const char *hcache_kyotocabinet_backend(void)
 {
-  /* SHORT_STRING(128) should be more than enough for KCVERSION */
-  static char version_cache[SHORT_STRING] = "";
-  if (!version_cache[0])
+  static char version_cache[128] = { 0 }; ///< should be more than enough for KCVERSION
+  if (version_cache[0] == '\0')
     snprintf(version_cache, sizeof(version_cache), "kyotocabinet %s", KCVERSION);
 
   return version_cache;

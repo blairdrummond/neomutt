@@ -30,41 +30,16 @@
 
 #include "config.h"
 #include <errno.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <signal.h>
-#include <stdbool.h>
-#include <stdio.h>
 #include <string.h>
-#include <sys/select.h>
-#include <sys/socket.h>
-#include <sys/time.h>
 #include <time.h>
-#include <unistd.h>
 #include "mutt/mutt.h"
-#include "account.h"
-#include "conn_globals.h"
-#include "connection.h"
-#include "globals.h"
-#include "options.h"
-#include "protos.h"
-
 #include "socket.h"
+#include "conn_globals.h"
+#include "connaccount.h"
+#include "connection.h"
+#include "protos.h"
 #include "ssl.h"
 #include "tunnel.h"
-
-/* support for multiple socket connections */
-static struct ConnectionList Connections = TAILQ_HEAD_INITIALIZER(Connections);
-
-/**
- * mutt_socket_head - Get the first socket
- * @retval ptr First socket
- */
-struct ConnectionList *mutt_socket_head(void)
-{
-  return &Connections;
-}
 
 /**
  * socket_preconnect - Execute a command before opening a socket
@@ -73,16 +48,16 @@ struct ConnectionList *mutt_socket_head(void)
  */
 static int socket_preconnect(void)
 {
-  if (!Preconnect)
+  if (!C_Preconnect)
     return 0;
 
-  mutt_debug(2, "Executing preconnect: %s\n", Preconnect);
-  const int rc = mutt_system(Preconnect);
-  mutt_debug(2, "Preconnect result: %d\n", rc);
+  mutt_debug(LL_DEBUG2, "Executing preconnect: %s\n", C_Preconnect);
+  const int rc = mutt_system(C_Preconnect);
+  mutt_debug(LL_DEBUG2, "Preconnect result: %d\n", rc);
   if (rc != 0)
   {
     const int save_errno = errno;
-    mutt_perror(_("Preconnect command failed."));
+    mutt_perror(_("Preconnect command failed"));
 
     return save_errno;
   }
@@ -105,7 +80,7 @@ int mutt_socket_open(struct Connection *conn)
 
   rc = conn->conn_open(conn);
 
-  mutt_debug(2, "Connected to %s:%d on fd=%d\n", conn->account.host,
+  mutt_debug(LL_DEBUG2, "Connected to %s:%d on fd=%d\n", conn->account.host,
              conn->account.port, conn->fd);
 
   return rc;
@@ -119,10 +94,13 @@ int mutt_socket_open(struct Connection *conn)
  */
 int mutt_socket_close(struct Connection *conn)
 {
+  if (!conn)
+    return 0;
+
   int rc = -1;
 
   if (conn->fd < 0)
-    mutt_debug(1, "Attempt to close closed connection.\n");
+    mutt_debug(LL_DEBUG1, "Attempt to close closed connection\n");
   else
     rc = conn->conn_close(conn);
 
@@ -175,7 +153,7 @@ int mutt_socket_write_d(struct Connection *conn, const char *buf, int len, int d
 
   if (conn->fd < 0)
   {
-    mutt_debug(1, "attempt to write to closed connection\n");
+    mutt_debug(LL_DEBUG1, "attempt to write to closed connection\n");
     return -1;
   }
 
@@ -184,14 +162,14 @@ int mutt_socket_write_d(struct Connection *conn, const char *buf, int len, int d
     const int rc = conn->conn_write(conn, buf + sent, len - sent);
     if (rc < 0)
     {
-      mutt_debug(1, "error writing (%s), closing socket\n", strerror(errno));
+      mutt_debug(LL_DEBUG1, "error writing (%s), closing socket\n", strerror(errno));
       mutt_socket_close(conn);
 
       return -1;
     }
 
     if (rc < len - sent)
-      mutt_debug(3, "short write (%d of %d bytes)\n", rc, len - sent);
+      mutt_debug(LL_DEBUG3, "short write (%d of %d bytes)\n", rc, len - sent);
 
     sent += rc;
   }
@@ -210,7 +188,7 @@ int mutt_socket_write_d(struct Connection *conn, const char *buf, int len, int d
 int mutt_socket_poll(struct Connection *conn, time_t wait_secs)
 {
   if (conn->bufpos < conn->available)
-    return (conn->available - conn->bufpos);
+    return conn->available - conn->bufpos;
 
   if (conn->conn_poll)
     return conn->conn_poll(conn, wait_secs);
@@ -233,7 +211,7 @@ int mutt_socket_readchar(struct Connection *conn, char *c)
       conn->available = conn->conn_read(conn, conn->inbuf, sizeof(conn->inbuf));
     else
     {
-      mutt_debug(1, "attempt to read from closed connection.\n");
+      mutt_debug(LL_DEBUG1, "attempt to read from closed connection\n");
       return -1;
     }
     conn->bufpos = 0;
@@ -280,14 +258,14 @@ int mutt_socket_readln_d(char *buf, size_t buflen, struct Connection *conn, int 
   }
 
   /* strip \r from \r\n termination */
-  if (i && buf[i - 1] == '\r')
+  if (i && (buf[i - 1] == '\r'))
     i--;
   buf[i] = '\0';
 
   mutt_debug(dbg, "%d< %s\n", conn->fd, buf);
 
   /* number of bytes read, not strlen */
-  return (i + 1);
+  return i + 1;
 }
 
 /**
@@ -320,25 +298,5 @@ struct Connection *mutt_socket_new(enum ConnectionType type)
     conn->conn_poll = raw_socket_poll;
   }
 
-  if (conn)
-    TAILQ_INSERT_HEAD(&Connections, conn, entries);
-
   return conn;
-}
-
-/**
- * mutt_socket_free - remove connection from connection list and free it
- */
-void mutt_socket_free(struct Connection *conn)
-{
-  struct Connection *np = NULL;
-  TAILQ_FOREACH(np, &Connections, entries)
-  {
-    if (np == conn)
-    {
-      TAILQ_REMOVE(&Connections, np, entries);
-      FREE(&np);
-      return;
-    }
-  }
 }

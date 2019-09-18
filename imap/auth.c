@@ -32,14 +32,15 @@
 #include <string.h>
 #include "mutt/mutt.h"
 #include "auth.h"
-#include "globals.h"
-#include "protos.h"
+
+/* These Config Variables are only used in imap/auth.c */
+struct Slist *C_ImapAuthenticators; ///< Config: (imap) List of allowed IMAP authentication methods
 
 /**
  * imap_authenticators - Accepted authentication methods
  */
 static const struct ImapAuth imap_authenticators[] = {
-  { imap_auth_plain, "plain" },
+  { imap_auth_oauth, "oauthbearer" }, { imap_auth_plain, "plain" },
 #ifdef USE_SASL
   { imap_auth_sasl, NULL },
 #else
@@ -57,64 +58,53 @@ static const struct ImapAuth imap_authenticators[] = {
 
 /**
  * imap_authenticate - Authenticate to an IMAP server
- * @param idata Server data
+ * @param adata Imap Account data
  * @retval num Result, e.g. #IMAP_AUTH_SUCCESS
  *
  * Attempt to authenticate using either user-specified authentication method if
  * specified, or any.
  */
-int imap_authenticate(struct ImapData *idata)
+int imap_authenticate(struct ImapAccountData *adata)
 {
-  int r = IMAP_AUTH_FAILURE;
+  int rc = IMAP_AUTH_FAILURE;
 
-  if (ImapAuthenticators && *ImapAuthenticators)
+  if (C_ImapAuthenticators && (C_ImapAuthenticators->count > 0))
   {
-    mutt_debug(2, "Trying user-defined imap_authenticators.\n");
+    mutt_debug(LL_DEBUG2, "Trying user-defined imap_authenticators\n");
 
     /* Try user-specified list of authentication methods */
-    char *methods = mutt_str_strdup(ImapAuthenticators);
-    char *delim = NULL;
-
-    for (const char *method = methods; method; method = delim)
+    struct ListNode *np = NULL;
+    STAILQ_FOREACH(np, &C_ImapAuthenticators->head, entries)
     {
-      delim = strchr(method, ':');
-      if (delim)
-        *delim++ = '\0';
-      if (!method[0])
-        continue;
+      mutt_debug(LL_DEBUG2, "Trying method %s\n", np->data);
 
-      mutt_debug(2, "Trying method %s\n", method);
-
-      for (size_t i = 0; i < mutt_array_size(imap_authenticators); ++i)
+      for (size_t i = 0; i < mutt_array_size(imap_authenticators); i++)
       {
         const struct ImapAuth *auth = &imap_authenticators[i];
-        if (!auth->method || (mutt_str_strcasecmp(auth->method, method) == 0))
+        if (!auth->method || (mutt_str_strcasecmp(auth->method, np->data) == 0))
         {
-          r = auth->authenticate(idata, method);
-          if (r == IMAP_AUTH_SUCCESS)
+          rc = auth->authenticate(adata, np->data);
+          if (rc == IMAP_AUTH_SUCCESS)
           {
-            FREE(&methods);
-            return r;
+            return rc;
           }
         }
       }
     }
-
-    FREE(&methods);
   }
   else
   {
     /* Fall back to default: any authenticator */
-    mutt_debug(2, "Trying pre-defined imap_authenticators.\n");
+    mutt_debug(LL_DEBUG2, "Trying pre-defined imap_authenticators\n");
 
-    for (size_t i = 0; i < mutt_array_size(imap_authenticators); ++i)
+    for (size_t i = 0; i < mutt_array_size(imap_authenticators); i++)
     {
-      r = imap_authenticators[i].authenticate(idata, NULL);
-      if (r == IMAP_AUTH_SUCCESS)
-        return r;
+      rc = imap_authenticators[i].authenticate(adata, NULL);
+      if (rc == IMAP_AUTH_SUCCESS)
+        return rc;
     }
   }
 
   mutt_error(_("No authenticators available or wrong credentials"));
-  return r;
+  return rc;
 }

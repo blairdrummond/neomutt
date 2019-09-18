@@ -6,6 +6,7 @@
  * Copyright (C) 1996-1998,2010,2012-2013 Michael R. Elkins <me@mutt.org>
  * Copyright (C) 1996-1999 Brandon Long <blong@fiction.net>
  * Copyright (C) 1999-2009,2012 Brendan Cully <brendan@kublai.com>
+ * Copyright (C) 2018 Richard Russon <rich@flatcap.org>
  *
  * @copyright
  * This program is free software: you can redistribute it and/or modify it under
@@ -31,153 +32,288 @@
 #include "config.h"
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include "imap_private.h"
 #include "mutt/mutt.h"
+#include "config/lib.h"
+#include "email/lib.h"
+#include "core/lib.h"
 #include "conn/conn.h"
 #include "bcache.h"
-#include "context.h"
+#include "curs_lib.h"
 #include "globals.h"
-#include "header.h"
+#include "hcache/hcache.h"
 #include "imap/imap.h"
-#include "mailbox.h"
 #include "message.h"
 #include "mutt_account.h"
-#include "mutt_socket.h"
-#include "mx.h"
 #include "options.h"
-#include "protos.h"
-#include "url.h"
-#ifdef USE_HCACHE
-#include "hcache/hcache.h"
-#endif
+
+/* These Config Variables are only used in imap/util.c */
+char *C_ImapDelimChars; ///< Config: (imap) Characters that denote separators in IMAP folders
+short C_ImapPipelineDepth; ///< Config: (imap) Number of IMAP commands that may be queued up
 
 /**
- * imap_expand_path - Canonicalise an IMAP path
- * @param path Buffer containing path
- * @param len  Buffer length
- * @retval  0 Success
- * @retval -1 Error
- *
- * IMAP implementation of mutt_expand_path. Rewrite an IMAP path in canonical
- * and absolute form.  The buffer is rewritten in place with the canonical IMAP
- * path.
- *
- * Function can fail if imap_parse_path() or url_tostring() fail,
- * of if the buffer isn't large enough.
+ * imap_adata_free - Release and clear storage in an ImapAccountData structure
+ * @param[out] ptr Imap Account data
  */
-int imap_expand_path(char *path, size_t len)
+void imap_adata_free(void **ptr)
 {
-  struct ImapMbox mx;
-  struct ImapData *idata = NULL;
-  struct Url url;
-  char fixedpath[LONG_STRING];
-  int rc;
+  if (!ptr || !*ptr)
+    return;
 
-  if (imap_parse_path(path, &mx) < 0)
+  struct ImapAccountData *adata = *ptr;
+
+  FREE(&adata->capstr);
+  mutt_buffer_dealloc(&adata->cmdbuf);
+  FREE(&adata->buf);
+  FREE(&adata->cmds);
+
+  if (adata->conn)
+  {
+    if (adata->conn->conn_close)
+      adata->conn->conn_close(adata->conn);
+    FREE(&adata->conn);
+  }
+
+  FREE(ptr);
+}
+
+/**
+ * imap_adata_new - Allocate and initialise a new ImapAccountData structure
+ * @retval ptr New ImapAccountData
+ */
+struct ImapAccountData *imap_adata_new(void)
+{
+  struct ImapAccountData *adata = mutt_mem_calloc(1, sizeof(struct ImapAccountData));
+  static unsigned char new_seqid = 'a';
+
+  adata->seqid = new_seqid;
+  adata->cmdslots = C_ImapPipelineDepth + 2;
+  adata->cmds = mutt_mem_calloc(adata->cmdslots, sizeof(*adata->cmds));
+
+  if (++new_seqid > 'z')
+    new_seqid = 'a';
+
+  return adata;
+}
+
+/**
+ * imap_adata_get - Get the Account data for this mailbox
+ * @param m Mailbox
+ * @retval ptr Private data
+ */
+struct ImapAccountData *imap_adata_get(struct Mailbox *m)
+{
+  if (!m || (m->magic != MUTT_IMAP) || !m->account)
+    return NULL;
+  return m->account->adata;
+}
+
+/**
+ * imap_adata_find - Find the Account data for this path
+ * @param path  Path to search for
+ * @param adata Imap Account data
+ * @param mdata Imap Mailbox data
+ * @retval  0 Success
+ * @retval -1 Failure
+ */
+int imap_adata_find(const char *path, struct ImapAccountData **adata,
+                    struct ImapMboxData **mdata)
+{
+  struct ConnAccount conn_account;
+  struct ImapAccountData *tmp_adata = NULL;
+  char tmp[1024];
+
+  if (imap_parse_path(path, &conn_account, tmp, sizeof(tmp)) < 0)
     return -1;
 
-  idata = imap_conn_find(&mx.account, MUTT_IMAP_CONN_NONEW);
-  mutt_account_tourl(&mx.account, &url);
-  imap_fix_path(idata, mx.mbox, fixedpath, sizeof(fixedpath));
-  url.path = fixedpath;
+  struct Account *np = NULL;
+  TAILQ_FOREACH(np, &NeoMutt->accounts, entries)
+  {
+    if (np->magic != MUTT_IMAP)
+      continue;
 
-  rc = url_tostring(&url, path, len, U_DECODE_PASSWD);
-  FREE(&mx.mbox);
+    tmp_adata = np->adata;
+    if (!tmp_adata)
+      continue;
+    if (imap_account_match(&tmp_adata->conn_account, &conn_account))
+    {
+      *mdata = imap_mdata_new(tmp_adata, tmp);
+      *adata = tmp_adata;
+      return 0;
+    }
+  }
+  mutt_debug(LL_DEBUG3, "no ImapAccountData found\n");
+  return -1;
+}
 
-  return rc;
+/**
+ * imap_mdata_new - Allocate and initialise a new ImapMboxData structure
+ * @retval ptr New ImapMboxData
+ */
+struct ImapMboxData *imap_mdata_new(struct ImapAccountData *adata, const char *name)
+{
+  char buf[1024];
+  struct ImapMboxData *mdata = mutt_mem_calloc(1, sizeof(struct ImapMboxData));
+
+  mdata->real_name = mutt_str_strdup(name);
+
+  imap_fix_path(adata->delim, name, buf, sizeof(buf));
+  if (buf[0] == '\0')
+    mutt_str_strfcpy(buf, "INBOX", sizeof(buf));
+  mdata->name = mutt_str_strdup(buf);
+
+  imap_munge_mbox_name(adata->unicode, buf, sizeof(buf), mdata->name);
+  mdata->munge_name = mutt_str_strdup(buf);
+
+  mdata->reopen &= IMAP_REOPEN_ALLOW;
+
+  STAILQ_INIT(&mdata->flags);
+
+#ifdef USE_HCACHE
+  header_cache_t *hc = imap_hcache_open(adata, mdata);
+  if (hc)
+  {
+    void *uidvalidity = mutt_hcache_fetch_raw(hc, "/UIDVALIDITY", 12);
+    void *uidnext = mutt_hcache_fetch_raw(hc, "/UIDNEXT", 8);
+    unsigned long long *modseq = mutt_hcache_fetch_raw(hc, "/MODSEQ", 7);
+    if (uidvalidity)
+    {
+      mdata->uid_validity = *(unsigned int *) uidvalidity;
+      mdata->uid_next = uidnext ? *(unsigned int *) uidnext : 0;
+      mdata->modseq = modseq ? *modseq : 0;
+      mutt_debug(LL_DEBUG3, "hcache uidvalidity %u, uidnext %u, modseq %llu\n",
+                 mdata->uid_validity, mdata->uid_next, mdata->modseq);
+    }
+    mutt_hcache_free(hc, &uidvalidity);
+    mutt_hcache_free(hc, &uidnext);
+    mutt_hcache_free(hc, (void **) &modseq);
+    mutt_hcache_close(hc);
+  }
+#endif
+
+  return mdata;
+}
+
+/**
+ * imap_mdata_cache_reset - Release and clear cache data of ImapMboxData structure
+ * @param mdata Imap Mailbox data
+ */
+void imap_mdata_cache_reset(struct ImapMboxData *mdata)
+{
+  mutt_hash_free(&mdata->uid_hash);
+  FREE(&mdata->msn_index);
+  mdata->msn_index_size = 0;
+  mdata->max_msn = 0;
+  mutt_bcache_close(&mdata->bcache);
+}
+
+/**
+ * imap_mdata_free - Release and clear storage in an ImapMboxData structure
+ * @param[out] ptr Imap Mailbox data
+ */
+void imap_mdata_free(void **ptr)
+{
+  if (!ptr || !*ptr)
+    return;
+
+  struct ImapMboxData *mdata = *ptr;
+
+  imap_mdata_cache_reset(mdata);
+  mutt_list_free(&mdata->flags);
+  FREE(&mdata->name);
+  FREE(&mdata->real_name);
+  FREE(&mdata->munge_name);
+  FREE(ptr);
+}
+
+/**
+ * imap_mdata_get - Get the Mailbox data for this mailbox
+ */
+struct ImapMboxData *imap_mdata_get(struct Mailbox *m)
+{
+  if (!m || (m->magic != MUTT_IMAP) || !m->mdata)
+    return NULL;
+  return m->mdata;
 }
 
 /**
  * imap_get_parent - Get an IMAP folder's parent
- * @param output Buffer for the result
  * @param mbox   Mailbox whose parent is to be determined
- * @param olen   Length of the buffer
  * @param delim  Path delimiter
+ * @param buf    Buffer for the result
+ * @param buflen Length of the buffer
  */
-void imap_get_parent(char *output, const char *mbox, size_t olen, char delim)
+void imap_get_parent(const char *mbox, char delim, char *buf, size_t buflen)
 {
   int n;
 
   /* Make a copy of the mailbox name, but only if the pointers are different */
-  if (mbox != output)
-    mutt_str_strfcpy(output, mbox, olen);
+  if (mbox != buf)
+    mutt_str_strfcpy(buf, mbox, buflen);
 
-  n = mutt_str_strlen(output);
+  n = mutt_str_strlen(buf);
 
   /* Let's go backwards until the next delimiter
    *
-   * If output[n] is a '/', the first n-- will allow us
-   * to ignore it. If it isn't, then output looks like
+   * If buf[n] is a '/', the first n-- will allow us
+   * to ignore it. If it isn't, then buf looks like
    * "/aaaaa/bbbb". There is at least one "b", so we can't skip
    * the "/" after the 'a's.
    *
-   * If output == '/', then n-- => n == 0, so the loop ends
-   * immediately
-   */
-  for (n--; n >= 0 && output[n] != delim; n--)
+   * If buf == '/', then n-- => n == 0, so the loop ends
+   * immediately */
+  for (n--; n >= 0 && buf[n] != delim; n--)
     ;
 
-  /* We stopped before the beginning. There is a trailing
-   * slash.
-   */
+  /* We stopped before the beginning. There is a trailing slash.  */
   if (n > 0)
   {
     /* Strip the trailing delimiter.  */
-    output[n] = '\0';
+    buf[n] = '\0';
   }
   else
   {
-    output[0] = (n == 0) ? delim : '\0';
+    buf[0] = (n == 0) ? delim : '\0';
   }
 }
 
 /**
  * imap_get_parent_path - Get the path of the parent folder
- * @param output Buffer for the result
  * @param path   Mailbox whose parent is to be determined
- * @param olen   Length of the buffer
+ * @param buf    Buffer for the result
+ * @param buflen Length of the buffer
  *
- * Provided an imap path, returns in output the parent directory if
+ * Provided an imap path, returns in buf the parent directory if
  * existent. Else returns the same path.
  */
-void imap_get_parent_path(char *output, const char *path, size_t olen)
+void imap_get_parent_path(const char *path, char *buf, size_t buflen)
 {
-  struct ImapMbox mx;
-  struct ImapData *idata = NULL;
-  char mbox[LONG_STRING] = "";
+  struct ImapAccountData *adata = NULL;
+  struct ImapMboxData *mdata = NULL;
+  char mbox[1024];
 
-  if (imap_parse_path(path, &mx) < 0)
+  if (imap_adata_find(path, &adata, &mdata) < 0)
   {
-    mutt_str_strfcpy(output, path, olen);
+    mutt_str_strfcpy(buf, path, buflen);
     return;
   }
-
-  idata = imap_conn_find(&mx.account, MUTT_IMAP_CONN_NONEW);
-  if (!idata)
-  {
-    mutt_str_strfcpy(output, path, olen);
-    return;
-  }
-
-  /* Stores a fixed path in mbox */
-  imap_fix_path(idata, mx.mbox, mbox, sizeof(mbox));
 
   /* Gets the parent mbox in mbox */
-  imap_get_parent(mbox, mbox, sizeof(mbox), idata->delim);
+  imap_get_parent(mdata->name, adata->delim, mbox, sizeof(mbox));
 
   /* Returns a fully qualified IMAP url */
-  imap_qualify_path(output, olen, &mx, mbox);
-  FREE(&mx.mbox);
+  imap_qualify_path(buf, buflen, &adata->conn_account, mbox);
+  imap_mdata_free((void *) &mdata);
 }
 
 /**
@@ -189,31 +325,80 @@ void imap_get_parent_path(char *output, const char *path, size_t olen)
  */
 void imap_clean_path(char *path, size_t plen)
 {
-  struct ImapMbox mx;
-  struct ImapData *idata = NULL;
-  char mbox[LONG_STRING] = "";
+  struct ImapAccountData *adata = NULL;
+  struct ImapMboxData *mdata = NULL;
 
-  if (imap_parse_path(path, &mx) < 0)
+  if (imap_adata_find(path, &adata, &mdata) < 0)
     return;
-
-  idata = imap_conn_find(&mx.account, MUTT_IMAP_CONN_NONEW);
-  if (!idata)
-    return;
-
-  /* Stores a fixed path in mbox */
-  imap_fix_path(idata, mx.mbox, mbox, sizeof(mbox));
 
   /* Returns a fully qualified IMAP url */
-  imap_qualify_path(path, plen, &mx, mbox);
+  imap_qualify_path(path, plen, &adata->conn_account, mdata->name);
+  imap_mdata_free((void *) &mdata);
 }
 
 #ifdef USE_HCACHE
 /**
- * imap_hcache_namer - Generate a filename for the header cache
- * @param path Path for the header cache file
- * @param dest Buffer for result
- * @param dlen Length of buffer
- * @retval num Chars written to dest
+ * imap_msn_index_to_uid_seqset - Convert MSN index of UIDs to Seqset
+ * @param buf   Buffer for the result
+ * @param mdata Imap Mailbox data
+ *
+ * Generates a seqseq of the UIDs in msn_index to persist in the header cache.
+ * Empty spots are stored as 0.
+ */
+static void imap_msn_index_to_uid_seqset(struct Buffer *buf, struct ImapMboxData *mdata)
+{
+  int first = 1, state = 0;
+  unsigned int cur_uid = 0, last_uid = 0;
+  unsigned int range_begin = 0, range_end = 0;
+
+  for (unsigned int msn = 1; msn <= mdata->max_msn + 1; msn++)
+  {
+    bool match = false;
+    if (msn <= mdata->max_msn)
+    {
+      struct Email *e_cur = mdata->msn_index[msn - 1];
+      cur_uid = e_cur ? imap_edata_get(e_cur)->uid : 0;
+      if (!state || (cur_uid && ((cur_uid - 1) == last_uid)))
+        match = true;
+      last_uid = cur_uid;
+    }
+
+    if (match)
+    {
+      switch (state)
+      {
+        case 1: /* single: convert to a range */
+          state = 2;
+          /* fall through */
+        case 2: /* extend range ending */
+          range_end = cur_uid;
+          break;
+        default:
+          state = 1;
+          range_begin = cur_uid;
+          break;
+      }
+    }
+    else if (state)
+    {
+      if (first)
+        first = 0;
+      else
+        mutt_buffer_addch(buf, ',');
+
+      if (state == 1)
+        mutt_buffer_add_printf(buf, "%u", range_begin);
+      else if (state == 2)
+        mutt_buffer_add_printf(buf, "%u:%u", range_begin, range_end);
+
+      state = 1;
+      range_begin = cur_uid;
+    }
+  }
+}
+
+/**
+ * imap_hcache_namer - Generate a filename for the header cache - Implements ::hcache_namer_t
  */
 static int imap_hcache_namer(const char *path, char *dest, size_t dlen)
 {
@@ -222,232 +407,232 @@ static int imap_hcache_namer(const char *path, char *dest, size_t dlen)
 
 /**
  * imap_hcache_open - Open a header cache
- * @param idata Server data
- * @param path  Path to the header cache
+ * @param adata Imap Account data
+ * @param mdata Imap Mailbox data
  * @retval ptr HeaderCache
  * @retval NULL Failure
  */
-header_cache_t *imap_hcache_open(struct ImapData *idata, const char *path)
+header_cache_t *imap_hcache_open(struct ImapAccountData *adata, struct ImapMboxData *mdata)
 {
-  struct ImapMbox mx;
+  if (!adata || !mdata)
+    return NULL;
+
   struct Url url;
   char cachepath[PATH_MAX];
   char mbox[PATH_MAX];
 
-  if (path)
-    imap_cachepath(idata, path, mbox, sizeof(mbox));
-  else
-  {
-    if (!idata->ctx || imap_parse_path(idata->ctx->path, &mx) < 0)
-      return NULL;
+  imap_cachepath(adata->delim, mdata->name, mbox, sizeof(mbox));
 
-    imap_cachepath(idata, mx.mbox, mbox, sizeof(mbox));
-    FREE(&mx.mbox);
-  }
+  if (strstr(mbox, "/../") || (strcmp(mbox, "..") == 0) || (strncmp(mbox, "../", 3) == 0))
+    return NULL;
+  size_t len = strlen(mbox);
+  if ((len > 3) && (strcmp(mbox + len - 3, "/..") == 0))
+    return NULL;
 
-  mutt_account_tourl(&idata->conn->account, &url);
+  mutt_account_tourl(&adata->conn->account, &url);
   url.path = mbox;
   url_tostring(&url, cachepath, sizeof(cachepath), U_PATH);
 
-  return mutt_hcache_open(HeaderCache, cachepath, imap_hcache_namer);
+  return mutt_hcache_open(C_HeaderCache, cachepath, imap_hcache_namer);
 }
 
 /**
  * imap_hcache_close - Close the header cache
- * @param idata Server data
+ * @param mdata Imap Mailbox data
  */
-void imap_hcache_close(struct ImapData *idata)
+void imap_hcache_close(struct ImapMboxData *mdata)
 {
-  if (!idata->hcache)
+  if (!mdata->hcache)
     return;
 
-  mutt_hcache_close(idata->hcache);
-  idata->hcache = NULL;
+  mutt_hcache_close(mdata->hcache);
+  mdata->hcache = NULL;
 }
 
 /**
  * imap_hcache_get - Get a header cache entry by its UID
- * @param idata Server data
+ * @param mdata Imap Mailbox data
  * @param uid   UID to find
- * @retval ptr Email Header
+ * @retval ptr Email
  * @retval NULL Failure
  */
-struct Header *imap_hcache_get(struct ImapData *idata, unsigned int uid)
+struct Email *imap_hcache_get(struct ImapMboxData *mdata, unsigned int uid)
 {
-  char key[16];
-  void *uv = NULL;
-  struct Header *h = NULL;
-
-  if (!idata->hcache)
+  if (!mdata->hcache)
     return NULL;
 
+  char key[16];
+  struct Email *e = NULL;
+
   sprintf(key, "/%u", uid);
-  uv = mutt_hcache_fetch(idata->hcache, key, imap_hcache_keylen(key));
+  void *uv = mutt_hcache_fetch(mdata->hcache, key, mutt_str_strlen(key));
   if (uv)
   {
-    if (*(unsigned int *) uv == idata->uid_validity)
-      h = mutt_hcache_restore(uv);
+    const size_t *const uid_validity = uv;
+    if (*uid_validity == mdata->uid_validity)
+      e = mutt_hcache_restore(uv);
     else
-      mutt_debug(3, "hcache uidvalidity mismatch: %u\n", *(unsigned int *) uv);
-    mutt_hcache_free(idata->hcache, &uv);
+      mutt_debug(LL_DEBUG3, "hcache uidvalidity mismatch: %zu\n", *uid_validity);
+    mutt_hcache_free(mdata->hcache, &uv);
   }
 
-  return h;
+  return e;
 }
 
 /**
  * imap_hcache_put - Add an entry to the header cache
- * @param idata Server data
- * @param h     Email Header
+ * @param mdata Imap Mailbox data
+ * @param e     Email
  * @retval  0 Success
  * @retval -1 Failure
  */
-int imap_hcache_put(struct ImapData *idata, struct Header *h)
+int imap_hcache_put(struct ImapMboxData *mdata, struct Email *e)
 {
-  char key[16];
-
-  if (!idata->hcache)
+  if (!mdata->hcache)
     return -1;
 
-  sprintf(key, "/%u", HEADER_DATA(h)->uid);
-  return mutt_hcache_store(idata->hcache, key, imap_hcache_keylen(key), h, idata->uid_validity);
+  char key[16];
+
+  sprintf(key, "/%u", imap_edata_get(e)->uid);
+  return mutt_hcache_store(mdata->hcache, key, mutt_str_strlen(key), e, mdata->uid_validity);
 }
 
 /**
  * imap_hcache_del - Delete an item from the header cache
- * @param idata Server data
+ * @param mdata Imap Mailbox data
  * @param uid   UID of entry to delete
  * @retval  0 Success
  * @retval -1 Failure
  */
-int imap_hcache_del(struct ImapData *idata, unsigned int uid)
+int imap_hcache_del(struct ImapMboxData *mdata, unsigned int uid)
 {
-  char key[16];
-
-  if (!idata->hcache)
+  if (!mdata->hcache)
     return -1;
 
+  char key[16];
+
   sprintf(key, "/%u", uid);
-  return mutt_hcache_delete(idata->hcache, key, imap_hcache_keylen(key));
+  return mutt_hcache_delete_header(mdata->hcache, key, mutt_str_strlen(key));
+}
+
+/**
+ * imap_hcache_store_uid_seqset - Store a UID Sequence Set in the header cache
+ * @param mdata Imap Mailbox data
+ * @retval  0 Success
+ * @retval -1 Error
+ */
+int imap_hcache_store_uid_seqset(struct ImapMboxData *mdata)
+{
+  if (!mdata->hcache)
+    return -1;
+
+  /* The seqset is likely large.  Preallocate to reduce reallocs */
+  struct Buffer buf = mutt_buffer_make(8192);
+  imap_msn_index_to_uid_seqset(&buf, mdata);
+
+  int rc = mutt_hcache_store_raw(mdata->hcache, "/UIDSEQSET", 10, buf.data,
+                                 mutt_buffer_len(&buf) + 1);
+  mutt_debug(LL_DEBUG3, "Stored /UIDSEQSET %s\n", buf.data);
+  mutt_buffer_dealloc(&buf);
+  return rc;
+}
+
+/**
+ * imap_hcache_clear_uid_seqset - Delete a UID Sequence Set from the header cache
+ * @param mdata Imap Mailbox data
+ * @retval  0 Success
+ * @retval -1 Error
+ */
+int imap_hcache_clear_uid_seqset(struct ImapMboxData *mdata)
+{
+  if (!mdata->hcache)
+    return -1;
+
+  return mutt_hcache_delete_header(mdata->hcache, "/UIDSEQSET", 10);
+}
+
+/**
+ * imap_hcache_get_uid_seqset - Get a UID Sequence Set from the header cache
+ * @param mdata Imap Mailbox data
+ * @retval ptr  UID Sequence Set
+ * @retval NULL Error
+ */
+char *imap_hcache_get_uid_seqset(struct ImapMboxData *mdata)
+{
+  if (!mdata->hcache)
+    return NULL;
+
+  char *hc_seqset = mutt_hcache_fetch_raw(mdata->hcache, "/UIDSEQSET", 10);
+  char *seqset = mutt_str_strdup(hc_seqset);
+  mutt_hcache_free(mdata->hcache, (void **) &hc_seqset);
+  mutt_debug(LL_DEBUG3, "Retrieved /UIDSEQSET %s\n", NONULL(seqset));
+
+  return seqset;
 }
 #endif
 
 /**
- * imap_parse_path - Parse an IMAP mailbox name into name,host,port
- * @param path Mailbox path to parse
- * @param mx   An IMAP mailbox
+ * imap_parse_path - Parse an IMAP mailbox name into ConnAccount, name
+ * @param path       Mailbox path to parse
+ * @param account    Account credentials
+ * @param mailbox    Buffer for mailbox name
+ * @param mailboxlen Length of buffer
  * @retval  0 Success
  * @retval -1 Failure
  *
  * Given an IMAP mailbox name, return host, port and a path IMAP servers will
  * recognize.  mx.mbox is malloc'd, caller must free it
  */
-int imap_parse_path(const char *path, struct ImapMbox *mx)
+int imap_parse_path(const char *path, struct ConnAccount *account, char *mailbox, size_t mailboxlen)
 {
   static unsigned short ImapPort = 0;
   static unsigned short ImapsPort = 0;
   struct servent *service = NULL;
-  struct Url url;
-  char *c = NULL;
 
-  if (!ImapPort)
+  if (ImapPort == 0)
   {
     service = getservbyname("imap", "tcp");
     if (service)
       ImapPort = ntohs(service->s_port);
     else
       ImapPort = IMAP_PORT;
-    mutt_debug(3, "Using default IMAP port %d\n", ImapPort);
+    mutt_debug(LL_DEBUG3, "Using default IMAP port %d\n", ImapPort);
   }
-  if (!ImapsPort)
+  if (ImapsPort == 0)
   {
     service = getservbyname("imaps", "tcp");
     if (service)
       ImapsPort = ntohs(service->s_port);
     else
       ImapsPort = IMAP_SSL_PORT;
-    mutt_debug(3, "Using default IMAPS port %d\n", ImapsPort);
+    mutt_debug(LL_DEBUG3, "Using default IMAPS port %d\n", ImapsPort);
   }
 
   /* Defaults */
-  memset(&mx->account, 0, sizeof(mx->account));
-  mx->account.port = ImapPort;
-  mx->account.type = MUTT_ACCT_TYPE_IMAP;
+  memset(account, 0, sizeof(struct ConnAccount));
+  account->port = ImapPort;
+  account->type = MUTT_ACCT_TYPE_IMAP;
 
-  c = mutt_str_strdup(path);
-  url_parse(&url, c);
-  if (url.scheme == U_IMAP || url.scheme == U_IMAPS)
+  struct Url *url = url_parse(path);
+  if (url && ((url->scheme == U_IMAP) || (url->scheme == U_IMAPS)))
   {
-    if (mutt_account_fromurl(&mx->account, &url) < 0 || !*mx->account.host)
+    if ((mutt_account_fromurl(account, url) < 0) || !*account->host)
     {
       url_free(&url);
-      FREE(&c);
       return -1;
     }
+    if (url->scheme == U_IMAPS)
+      account->flags |= MUTT_ACCT_SSL;
 
-    mx->mbox = mutt_str_strdup(url.path);
-
-    if (url.scheme == U_IMAPS)
-      mx->account.flags |= MUTT_ACCT_SSL;
+    mutt_str_strfcpy(mailbox, url->path, mailboxlen);
 
     url_free(&url);
-    FREE(&c);
   }
-  /* old PINE-compatibility code */
   else
-  {
-    url_free(&url);
-    FREE(&c);
-    char tmp[128];
-    if (sscanf(path, "{%127[^}]}", tmp) != 1)
-      return -1;
+    return -1;
 
-    c = strchr(path, '}');
-    if (!c)
-      return -1;
-    else
-    {
-      /* walk past closing '}' */
-      mx->mbox = mutt_str_strdup(c + 1);
-    }
-
-    c = strrchr(tmp, '@');
-    if (c)
-    {
-      *c = '\0';
-      mutt_str_strfcpy(mx->account.user, tmp, sizeof(mx->account.user));
-      mutt_str_strfcpy(tmp, c + 1, sizeof(tmp));
-      mx->account.flags |= MUTT_ACCT_USER;
-    }
-
-    const int n = sscanf(tmp, "%127[^:/]%127s", mx->account.host, tmp);
-    if (n < 1)
-    {
-      mutt_debug(1, "NULL host in %s\n", path);
-      FREE(&mx->mbox);
-      return -1;
-    }
-
-    if (n > 1)
-    {
-      if (sscanf(tmp, ":%hu%127s", &(mx->account.port), tmp) >= 1)
-        mx->account.flags |= MUTT_ACCT_PORT;
-      if (sscanf(tmp, "/%s", tmp) == 1)
-      {
-        if (mutt_str_strncmp(tmp, "ssl", 3) == 0)
-          mx->account.flags |= MUTT_ACCT_SSL;
-        else
-        {
-          mutt_debug(1, "Unknown connection type in %s\n", path);
-          FREE(&mx->mbox);
-          return -1;
-        }
-      }
-    }
-  }
-
-  if ((mx->account.flags & MUTT_ACCT_SSL) && !(mx->account.flags & MUTT_ACCT_PORT))
-    mx->account.port = ImapsPort;
+  if ((account->flags & MUTT_ACCT_SSL) && !(account->flags & MUTT_ACCT_PORT))
+    account->port = ImapsPort;
 
   return 0;
 }
@@ -482,8 +667,8 @@ int imap_mxcmp(const char *mx1, const char *mx2)
   b1 = mutt_mem_malloc(strlen(mx1) + 1);
   b2 = mutt_mem_malloc(strlen(mx2) + 1);
 
-  imap_fix_path(NULL, mx1, b1, strlen(mx1) + 1);
-  imap_fix_path(NULL, mx2, b2, strlen(mx2) + 1);
+  imap_fix_path('\0', mx1, b1, strlen(mx1) + 1);
+  imap_fix_path('\0', mx2, b2, strlen(mx2) + 1);
 
   rc = mutt_str_strcmp(b1, b2);
   FREE(&b1);
@@ -494,75 +679,77 @@ int imap_mxcmp(const char *mx1, const char *mx2)
 
 /**
  * imap_pretty_mailbox - Prettify an IMAP mailbox name
- * @param path Mailbox name to be tidied
+ * @param path    Mailbox name to be tidied
+ * @param pathlen Length of path
+ * @param folder  Path to use for '+' abbreviations
  *
  * Called by mutt_pretty_mailbox() to make IMAP paths look nice.
  */
-void imap_pretty_mailbox(char *path)
+void imap_pretty_mailbox(char *path, size_t pathlen, const char *folder)
 {
-  struct ImapMbox home, target;
+  struct ConnAccount target_conn_account, home_conn_account;
   struct Url url;
   char *delim = NULL;
   int tlen;
   int hlen = 0;
   bool home_match = false;
+  char target_mailbox[1024];
+  char home_mailbox[1024];
 
-  if (imap_parse_path(path, &target) < 0)
+  if (imap_parse_path(path, &target_conn_account, target_mailbox, sizeof(target_mailbox)) < 0)
     return;
 
-  tlen = mutt_str_strlen(target.mbox);
-  /* check whether we can do '=' substitution */
-  if (mx_is_imap(Folder) && !imap_parse_path(Folder, &home))
+  if (imap_path_probe(folder, NULL) != MUTT_IMAP)
+    goto fallback;
+
+  if (imap_parse_path(folder, &home_conn_account, home_mailbox, sizeof(home_mailbox)) < 0)
+    goto fallback;
+
+  tlen = mutt_str_strlen(target_mailbox);
+  hlen = mutt_str_strlen(home_mailbox);
+
+  /* check whether we can do '+' substitution */
+  if (tlen && mutt_account_match(&home_conn_account, &target_conn_account) &&
+      (mutt_str_strncmp(home_mailbox, target_mailbox, hlen) == 0))
   {
-    hlen = mutt_str_strlen(home.mbox);
-    if (tlen && mutt_account_match(&home.account, &target.account) &&
-        (mutt_str_strncmp(home.mbox, target.mbox, hlen) == 0))
+    if (hlen == 0)
+      home_match = true;
+    else if (C_ImapDelimChars)
     {
-      if (hlen == 0)
-        home_match = true;
-      else if (ImapDelimChars)
-      {
-        for (delim = ImapDelimChars; *delim != '\0'; delim++)
-          if (target.mbox[hlen] == *delim)
-            home_match = true;
-      }
+      for (delim = C_ImapDelimChars; *delim != '\0'; delim++)
+        if (target_mailbox[hlen] == *delim)
+          home_match = true;
     }
-    FREE(&home.mbox);
   }
 
-  /* do the '=' substitution */
+  /* do the '+' substitution */
   if (home_match)
   {
-    *path++ = '=';
+    *path++ = '+';
     /* copy remaining path, skipping delimiter */
     if (hlen == 0)
       hlen = -1;
-    memcpy(path, target.mbox + hlen + 1, tlen - hlen - 1);
+    memcpy(path, target_mailbox + hlen + 1, tlen - hlen - 1);
     path[tlen - hlen - 1] = '\0';
-  }
-  else
-  {
-    mutt_account_tourl(&target.account, &url);
-    url.path = target.mbox;
-    /* FIXME: That hard-coded constant is bogus. But we need the actual
-     *   size of the buffer from mutt_pretty_mailbox. And these pretty
-     *   operations usually shrink the result. Still... */
-    url_tostring(&url, path, 1024, 0);
+    return;
   }
 
-  FREE(&target.mbox);
+fallback:
+  mutt_account_tourl(&target_conn_account, &url);
+  url.path = target_mailbox;
+  url_tostring(&url, path, pathlen, 0);
 }
 
 /**
  * imap_continue - display a message and ask the user if they want to go on
  * @param msg  Location of the error
  * @param resp Message for user
- * @retval num Result: #MUTT_YES, #MUTT_NO, #MUTT_ABORT
+ * @retval #QuadOption Result, e.g. #MUTT_NO
  */
-int imap_continue(const char *msg, const char *resp)
+enum QuadOption imap_continue(const char *msg, const char *resp)
 {
   imap_error(msg, resp);
-  return mutt_yesorno(_("Continue?"), 0);
+  return mutt_yesorno(_("Continue?"), MUTT_NO);
 }
 
 /**
@@ -572,54 +759,16 @@ int imap_continue(const char *msg, const char *resp)
  */
 void imap_error(const char *where, const char *msg)
 {
-  mutt_error("%s [%s]\n", where, msg);
-}
-
-/**
- * imap_new_idata - Allocate and initialise a new ImapData structure
- * @retval NULL Failure (no mem)
- * @retval ptr New ImapData
- */
-struct ImapData *imap_new_idata(void)
-{
-  struct ImapData *idata = mutt_mem_calloc(1, sizeof(struct ImapData));
-
-  idata->cmdbuf = mutt_buffer_new();
-  idata->cmdslots = ImapPipelineDepth + 2;
-  idata->cmds = mutt_mem_calloc(idata->cmdslots, sizeof(*idata->cmds));
-
-  STAILQ_INIT(&idata->flags);
-  STAILQ_INIT(&idata->mboxcache);
-
-  return idata;
-}
-
-/**
- * imap_free_idata - Release and clear storage in an ImapData structure
- * @param idata Server data
- */
-void imap_free_idata(struct ImapData **idata)
-{
-  if (!idata)
-    return;
-
-  FREE(&(*idata)->capstr);
-  mutt_list_free(&(*idata)->flags);
-  imap_mboxcache_free(*idata);
-  mutt_buffer_free(&(*idata)->cmdbuf);
-  FREE(&(*idata)->buf);
-  mutt_bcache_close(&(*idata)->bcache);
-  FREE(&(*idata)->cmds);
-  FREE(idata);
+  mutt_error("%s [%s]", where, msg);
 }
 
 /**
  * imap_fix_path - Fix up the imap path
- * @param idata   Server data
- * @param mailbox Mailbox path
- * @param path    Buffer for the result
- * @param plen    Length of buffer
- * @retval ptr Fixed-up path
+ * @param server_delim  Imap Server Delim
+ * @param mailbox       Mailbox path
+ * @param path          Buffer for the result
+ * @param plen          Length of buffer
+ * @retval ptr          Fixed-up path
  *
  * This is necessary because the rest of neomutt assumes a hierarchy delimiter of
  * '/', which is not necessarily true in IMAP.  Additionally, the filesystem
@@ -627,24 +776,22 @@ void imap_free_idata(struct ImapData **idata)
  * to "/".  IMAP servers are not required to do this.
  * Moreover, IMAP servers may dislike the path ending with the delimiter.
  */
-char *imap_fix_path(struct ImapData *idata, const char *mailbox, char *path, size_t plen)
+char *imap_fix_path(char server_delim, const char *mailbox, char *path, size_t plen)
 {
   int i = 0;
-  char delim = '\0';
+  char delim = server_delim;
 
-  if (idata)
-    delim = idata->delim;
-
-  while (mailbox && *mailbox && i < plen - 1)
+  while (mailbox && *mailbox && (i < plen - 1))
   {
-    if ((ImapDelimChars && strchr(ImapDelimChars, *mailbox)) || (delim && *mailbox == delim))
+    if ((C_ImapDelimChars && strchr(C_ImapDelimChars, *mailbox)) ||
+        (delim && (*mailbox == delim)))
     {
       /* use connection delimiter if known. Otherwise use user delimiter */
-      if (!idata)
+      if (server_delim == '\0')
         delim = *mailbox;
 
-      while (*mailbox && ((ImapDelimChars && strchr(ImapDelimChars, *mailbox)) ||
-                          (delim && *mailbox == delim)))
+      while (*mailbox && ((C_ImapDelimChars && strchr(C_ImapDelimChars, *mailbox)) ||
+                          (delim && (*mailbox == delim))))
       {
         mailbox++;
       }
@@ -657,7 +804,7 @@ char *imap_fix_path(struct ImapData *idata, const char *mailbox, char *path, siz
     }
     i++;
   }
-  if (i && path[--i] != delim)
+  if (i && (path[--i] != delim))
     i++;
   path[i] = '\0';
 
@@ -666,23 +813,23 @@ char *imap_fix_path(struct ImapData *idata, const char *mailbox, char *path, siz
 
 /**
  * imap_cachepath - Generate a cache path for a mailbox
- * @param idata   Server data
+ * @param delim   Imap server delimiter
  * @param mailbox Mailbox name
  * @param dest    Buffer to store cache path
  * @param dlen    Length of buffer
  */
-void imap_cachepath(struct ImapData *idata, const char *mailbox, char *dest, size_t dlen)
+void imap_cachepath(char delim, const char *mailbox, char *dest, size_t dlen)
 {
   char *s = NULL;
   const char *p = mailbox;
 
-  for (s = dest; p && *p && dlen; dlen--)
+  for (s = dest; p && (p[0] != '\0') && (dlen > 0); dlen--)
   {
-    if (*p == idata->delim)
+    if (p[0] == delim)
     {
       *s = '/';
       /* simple way to avoid collisions with UIDs */
-      if (*(p + 1) >= '0' && *(p + 1) <= '9')
+      if ((p[1] >= '0') && (p[1] <= '9'))
       {
         if (--dlen)
           *++s = '_';
@@ -749,7 +896,7 @@ char *imap_get_qualifier(char *buf)
  */
 char *imap_next_word(char *s)
 {
-  int quoted = 0;
+  bool quoted = false;
 
   while (*s)
   {
@@ -761,8 +908,8 @@ char *imap_next_word(char *s)
       continue;
     }
     if (*s == '\"')
-      quoted = quoted ? 0 : 1;
-    if (!quoted && ISSPACE(*s))
+      quoted = !quoted;
+    if (!quoted && IS_SPACE(*s))
       break;
     s++;
   }
@@ -773,48 +920,48 @@ char *imap_next_word(char *s)
 
 /**
  * imap_qualify_path - Make an absolute IMAP folder target
- * @param dest Buffer for the result
- * @param len  Length of buffer
- * @param mx   Imap mailbox
- * @param path Path relative to the mailbox
- *
- * given ImapMbox and relative path.
+ * @param buf    Buffer for the result
+ * @param buflen Length of buffer
+ * @param conn_account     ConnAccount of the account
+ * @param path   Path relative to the mailbox
  */
-void imap_qualify_path(char *dest, size_t len, struct ImapMbox *mx, char *path)
+void imap_qualify_path(char *buf, size_t buflen, struct ConnAccount *conn_account, char *path)
 {
   struct Url url;
-
-  mutt_account_tourl(&mx->account, &url);
+  mutt_account_tourl(conn_account, &url);
   url.path = path;
-
-  url_tostring(&url, dest, len, 0);
+  url_tostring(&url, buf, buflen, 0);
 }
 
 /**
  * imap_quote_string - quote string according to IMAP rules
- * @param dest Buffer for the result
- * @param dlen Length of the buffer
- * @param src  String to be quoted
+ * @param dest           Buffer for the result
+ * @param dlen           Length of the buffer
+ * @param src            String to be quoted
+ * @param quote_backtick If true, quote backticks too
  *
  * Surround string with quotes, escape " and \ with backslash
  */
-void imap_quote_string(char *dest, size_t dlen, const char *src)
+void imap_quote_string(char *dest, size_t dlen, const char *src, bool quote_backtick)
 {
-  static const char quote[] = "\"\\";
+  const char *quote = "`\"\\";
+  if (!quote_backtick)
+    quote++;
+
   char *pt = dest;
   const char *s = src;
 
   *pt++ = '"';
-  /* save room for trailing quote-char */
-  dlen -= 2;
+  /* save room for quote-chars */
+  dlen -= 3;
 
   for (; *s && dlen; s++)
   {
     if (strchr(quote, *s))
     {
-      dlen -= 2;
-      if (dlen == 0)
+      if (dlen < 2)
         break;
+      dlen -= 2;
       *pt++ = '\\';
       *pt++ = *s;
     }
@@ -864,36 +1011,36 @@ void imap_unquote_string(char *s)
 
 /**
  * imap_munge_mbox_name - Quote awkward characters in a mailbox name
- * @param idata Server data
- * @param dest  Buffer to store safe mailbox name
- * @param dlen  Length of buffer
- * @param src   Mailbox name
+ * @param unicode true if Unicode is allowed
+ * @param dest    Buffer to store safe mailbox name
+ * @param dlen    Length of buffer
+ * @param src     Mailbox name
  */
-void imap_munge_mbox_name(struct ImapData *idata, char *dest, size_t dlen, const char *src)
+void imap_munge_mbox_name(bool unicode, char *dest, size_t dlen, const char *src)
 {
   char *buf = mutt_str_strdup(src);
-  imap_utf_encode(idata, &buf);
+  imap_utf_encode(unicode, &buf);
 
-  imap_quote_string(dest, dlen, buf);
+  imap_quote_string(dest, dlen, buf, false);
 
   FREE(&buf);
 }
 
 /**
  * imap_unmunge_mbox_name - Remove quoting from a mailbox name
- * @param idata Server data
- * @param s     Mailbox name
+ * @param unicode true if Unicode is allowed
+ * @param s       Mailbox name
  *
  * The string will be altered in-place.
  */
-void imap_unmunge_mbox_name(struct ImapData *idata, char *s)
+void imap_unmunge_mbox_name(bool unicode, char *s)
 {
   imap_unquote_string(s);
 
   char *buf = mutt_str_strdup(s);
   if (buf)
   {
-    imap_utf_decode(idata, &buf);
+    imap_utf_decode(unicode, &buf);
     strncpy(s, buf, strlen(s));
   }
 
@@ -905,20 +1052,19 @@ void imap_unmunge_mbox_name(struct ImapData *idata, char *s)
  */
 void imap_keepalive(void)
 {
-  struct Connection *conn = NULL;
-  struct ImapData *idata = NULL;
-  time_t now = time(NULL);
-
-  TAILQ_FOREACH(conn, mutt_socket_head(), entries)
+  time_t now = mutt_date_epoch();
+  struct Account *np = NULL;
+  TAILQ_FOREACH(np, &NeoMutt->accounts, entries)
   {
-    if (conn->account.type == MUTT_ACCT_TYPE_IMAP)
-    {
-      idata = conn->data;
-      if (idata->state >= IMAP_AUTHENTICATED && now >= idata->lastread + ImapKeepalive)
-      {
-        imap_check(idata, 1);
-      }
-    }
+    if (np->magic != MUTT_IMAP)
+      continue;
+
+    struct ImapAccountData *adata = np->adata;
+    if (!adata || !adata->mailbox)
+      continue;
+
+    if ((adata->state >= IMAP_AUTHENTICATED) && (now >= (adata->lastread + C_ImapKeepalive)))
+      imap_check_mailbox(adata->mailbox, true);
   }
 }
 
@@ -934,9 +1080,9 @@ int imap_wait_keepalive(pid_t pid)
   sigset_t oldmask;
   int rc;
 
-  bool imap_passive = ImapPassive;
+  bool imap_passive = C_ImapPassive;
 
-  ImapPassive = true;
+  C_ImapPassive = true;
   OptKeepQuiet = true;
 
   sigprocmask(SIG_SETMASK, NULL, &oldmask);
@@ -951,12 +1097,12 @@ int imap_wait_keepalive(pid_t pid)
 
   sigaction(SIGALRM, &act, &oldalrm);
 
-  alarm(ImapKeepalive);
-  while (waitpid(pid, &rc, 0) < 0 && errno == EINTR)
+  alarm(C_ImapKeepalive);
+  while ((waitpid(pid, &rc, 0) < 0) && (errno == EINTR))
   {
     alarm(0); /* cancel a possibly pending alarm */
     imap_keepalive();
-    alarm(ImapKeepalive);
+    alarm(C_ImapKeepalive);
   }
 
   alarm(0); /* cancel a possibly pending alarm */
@@ -966,53 +1112,160 @@ int imap_wait_keepalive(pid_t pid)
 
   OptKeepQuiet = false;
   if (!imap_passive)
-    ImapPassive = false;
+    C_ImapPassive = false;
 
   return rc;
 }
 
 /**
  * imap_allow_reopen - Allow re-opening a folder upon expunge
- * @param ctx Context
+ * @param m Mailbox
  */
-void imap_allow_reopen(struct Context *ctx)
+void imap_allow_reopen(struct Mailbox *m)
 {
-  struct ImapData *idata = NULL;
-  if (!ctx || !ctx->data || ctx->magic != MUTT_IMAP)
+  struct ImapAccountData *adata = imap_adata_get(m);
+  struct ImapMboxData *mdata = imap_mdata_get(m);
+  if (!adata || !adata->mailbox || (adata->mailbox != m) || !mdata)
     return;
-
-  idata = ctx->data;
-  if (idata->ctx == ctx)
-    idata->reopen |= IMAP_REOPEN_ALLOW;
+  mdata->reopen |= IMAP_REOPEN_ALLOW;
 }
 
 /**
  * imap_disallow_reopen - Disallow re-opening a folder upon expunge
- * @param ctx Context
+ * @param m Mailbox
  */
-void imap_disallow_reopen(struct Context *ctx)
+void imap_disallow_reopen(struct Mailbox *m)
 {
-  struct ImapData *idata = NULL;
-  if (!ctx || !ctx->data || ctx->magic != MUTT_IMAP)
+  struct ImapAccountData *adata = imap_adata_get(m);
+  struct ImapMboxData *mdata = imap_mdata_get(m);
+  if (!adata || !adata->mailbox || (adata->mailbox != m) || !mdata)
     return;
-
-  idata = ctx->data;
-  if (idata->ctx == ctx)
-    idata->reopen &= ~IMAP_REOPEN_ALLOW;
+  mdata->reopen &= ~IMAP_REOPEN_ALLOW;
 }
 
 /**
  * imap_account_match - Compare two Accounts
- * @param a1 First Account
- * @param a2 Second Account
+ * @param a1 First ConnAccount
+ * @param a2 Second ConnAccount
  * @retval true Accounts match
  */
-int imap_account_match(const struct Account *a1, const struct Account *a2)
+bool imap_account_match(const struct ConnAccount *a1, const struct ConnAccount *a2)
 {
-  struct ImapData *a1_idata = imap_conn_find(a1, MUTT_IMAP_CONN_NONEW);
-  struct ImapData *a2_idata = imap_conn_find(a2, MUTT_IMAP_CONN_NONEW);
-  const struct Account *a1_canon = a1_idata == NULL ? a1 : &a1_idata->conn->account;
-  const struct Account *a2_canon = a2_idata == NULL ? a2 : &a2_idata->conn->account;
+  if (!a1 || !a2)
+    return false;
+  if (a1->type != a2->type)
+    return false;
+  if (mutt_str_strcasecmp(a1->host, a2->host) != 0)
+    return false;
+  if ((a1->port != 0) && (a2->port != 0) && (a1->port != a2->port))
+    return false;
+  if (a1->flags & a2->flags & MUTT_ACCT_USER)
+    return strcmp(a1->user, a2->user) == 0;
 
-  return mutt_account_match(a1_canon, a2_canon);
+  const char *user = NONULL(Username);
+
+  if ((a1->type == MUTT_ACCT_TYPE_IMAP) && C_ImapUser)
+    user = C_ImapUser;
+
+  if (a1->flags & MUTT_ACCT_USER)
+    return strcmp(a1->user, user) == 0;
+  if (a2->flags & MUTT_ACCT_USER)
+    return strcmp(a2->user, user) == 0;
+
+  return true;
+}
+
+/**
+ * mutt_seqset_iterator_new - Create a new Sequence Set Iterator
+ * @param seqset Source Sequence Set
+ * @retval ptr Newly allocated Sequence Set Iterator
+ */
+struct SeqsetIterator *mutt_seqset_iterator_new(const char *seqset)
+{
+  if (!seqset || !*seqset)
+    return NULL;
+
+  struct SeqsetIterator *iter = mutt_mem_calloc(1, sizeof(struct SeqsetIterator));
+  iter->full_seqset = mutt_str_strdup(seqset);
+  iter->eostr = strchr(iter->full_seqset, '\0');
+  iter->substr_cur = iter->substr_end = iter->full_seqset;
+
+  return iter;
+}
+
+/**
+ * mutt_seqset_iterator_next - Get the next UID from a Sequence Set
+ * @param[in]  iter Sequence Set Iterator
+ * @param[out] next Next UID in set
+ * @retval  0 Next sequence is generated
+ * @retval  1 Iterator is finished
+ * @retval -1 error
+ */
+int mutt_seqset_iterator_next(struct SeqsetIterator *iter, unsigned int *next)
+{
+  if (!iter || !next)
+    return -1;
+
+  if (iter->in_range)
+  {
+    if ((iter->down && (iter->range_cur == (iter->range_end - 1))) ||
+        (!iter->down && (iter->range_cur == (iter->range_end + 1))))
+    {
+      iter->in_range = 0;
+    }
+  }
+
+  if (!iter->in_range)
+  {
+    iter->substr_cur = iter->substr_end;
+    if (iter->substr_cur == iter->eostr)
+      return 1;
+
+    while (!*(iter->substr_cur))
+      iter->substr_cur++;
+    iter->substr_end = strchr(iter->substr_cur, ',');
+    if (!iter->substr_end)
+      iter->substr_end = iter->eostr;
+    else
+      *(iter->substr_end) = '\0';
+
+    char *range_sep = strchr(iter->substr_cur, ':');
+    if (range_sep)
+      *range_sep++ = '\0';
+
+    if (mutt_str_atoui(iter->substr_cur, &iter->range_cur) != 0)
+      return -1;
+    if (range_sep)
+    {
+      if (mutt_str_atoui(range_sep, &iter->range_end) != 0)
+        return -1;
+    }
+    else
+      iter->range_end = iter->range_cur;
+
+    iter->down = (iter->range_end < iter->range_cur);
+    iter->in_range = 1;
+  }
+
+  *next = iter->range_cur;
+  if (iter->down)
+    iter->range_cur--;
+  else
+    iter->range_cur++;
+
+  return 0;
+}
+
+/**
+ * mutt_seqset_iterator_free - Free a Sequence Set Iterator
+ * @param[out] ptr Iterator to free
+ */
+void mutt_seqset_iterator_free(struct SeqsetIterator **ptr)
+{
+  if (!ptr || !*ptr)
+    return;
+
+  struct SeqsetIterator *iter = *ptr;
+  FREE(&iter->full_seqset);
+  FREE(ptr);
 }

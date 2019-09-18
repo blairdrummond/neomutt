@@ -28,19 +28,19 @@
 
 #include "config.h"
 #include <signal.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include "mutt/mutt.h"
 #include "mutt.h"
-#include "protos.h"
 #ifdef USE_IMAP
 #include "imap/imap.h"
 #endif
 
 /**
  * mutt_system - Run an external command
- * @param cmd Command and argments
+ * @param cmd Command and arguments
  * @retval -1  Error
  * @retval >=0 Success (command's return code)
  *
@@ -54,7 +54,7 @@ int mutt_system(const char *cmd)
   struct sigaction act;
   struct sigaction oldtstp;
   struct sigaction oldcont;
-  pid_t thepid;
+  pid_t pid;
 
   if (!cmd || !*cmd)
     return 0;
@@ -72,13 +72,13 @@ int mutt_system(const char *cmd)
   sigaction(SIGTSTP, &act, &oldtstp);
   sigaction(SIGCONT, &act, &oldcont);
 
-  thepid = fork();
-  if (thepid == 0)
+  pid = fork();
+  if (pid == 0)
   {
     act.sa_flags = 0;
 
     /* reset signals for the child; not really needed, but... */
-    mutt_sig_unblock_system(0);
+    mutt_sig_unblock_system(false);
     act.sa_handler = SIG_DFL;
     act.sa_flags = 0;
     sigemptyset(&act.sa_mask);
@@ -86,13 +86,13 @@ int mutt_system(const char *cmd)
     sigaction(SIGTSTP, &act, NULL);
     sigaction(SIGCONT, &act, NULL);
 
-    execle(EXECSHELL, "sh", "-c", cmd, NULL, mutt_envlist_getlist());
+    execle(EXEC_SHELL, "sh", "-c", cmd, NULL, mutt_envlist_getlist());
     _exit(127); /* execl error */
   }
-  else if (thepid != -1)
+  else if (pid != -1)
   {
 #ifdef USE_IMAP
-    rc = imap_wait_keepalive(thepid);
+    rc = imap_wait_keepalive(pid);
 #endif
   }
 
@@ -100,9 +100,9 @@ int mutt_system(const char *cmd)
   sigaction(SIGTSTP, &oldtstp, NULL);
 
   /* reset SIGINT, SIGQUIT and SIGCHLD */
-  mutt_sig_unblock_system(1);
+  mutt_sig_unblock_system(true);
 
-  rc = (thepid != -1) ? (WIFEXITED(rc) ? WEXITSTATUS(rc) : -1) : -1;
+  rc = (pid != -1) ? (WIFEXITED(rc) ? WEXITSTATUS(rc) : -1) : -1;
 
   return rc;
 }

@@ -21,13 +21,12 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _NCRYPT_PGPLIB_H
-#define _NCRYPT_PGPLIB_H
-
-#ifdef CRYPT_BACKEND_CLASSIC_PGP
+#ifndef MUTT_NCRYPT_PGPLIB_H
+#define MUTT_NCRYPT_PGPLIB_H
 
 #include <stdbool.h>
 #include <time.h>
+#include "ncrypt.h"
 
 /**
  * struct PgpUid - PGP User ID
@@ -49,7 +48,7 @@ struct PgpKeyInfo
   char *keyid;
   char *fingerprint;
   struct PgpUid *address;
-  int flags;
+  KeyFlags flags;
   short keylen;
   time_t gen_time;
   int numalg;
@@ -66,12 +65,10 @@ bool pgp_canencrypt(unsigned char type);
 bool pgp_cansign(unsigned char type);
 short pgp_get_abilities(unsigned char type);
 
-void pgp_free_key(struct PgpKeyInfo **kpp);
+void pgp_key_free(struct PgpKeyInfo **kpp);
 
 struct PgpKeyInfo *pgp_remove_key(struct PgpKeyInfo **klist, struct PgpKeyInfo *key);
 
-struct PgpKeyInfo *pgp_new_keyinfo(void);
+struct PgpKeyInfo *pgp_keyinfo_new(void);
 
-#endif /* CRYPT_BACKEND_CLASSIC_PGP */
-
-#endif /* _NCRYPT_PGPLIB_H */
+#endif /* MUTT_NCRYPT_PGPLIB_H */

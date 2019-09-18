@@ -1,3 +1,36 @@
+2018-07-16  Richard Russon  <rich@flatcap.org>
+* Features
+  - \<check-stats\> function
+* Bug Fixes
+  - Lots
+
+2018-06-22  Richard Russon  <rich@flatcap.org>
+* Features
+  - Expand variables inside backticks
+  - Honour SASL-IR IMAP capability in SASL PLAIN
+* Bug Fixes
+  - Fix toggle-read
+  - Do not truncate shell commands on ; or #
+  - pager: index must be rebuilt on MUTT_REOPENED
+  - Handle a BAD response in AUTH PLAIN w/o initial response
+  - fcc_attach: Don't ask every time
+  - Enlarge path buffers PATH_MAX (4096)
+  - Move LSUB call from connection establishment to mailbox SELECTion
+* Translations
+  - Update Chinese (Simplified): 100%
+  - Update Czech: 100%
+  - Update German: 100%
+  - Update Lithuanian: 100%
+  - Update Portuguese (Brazil): 100%
+  - Update Slovak: 59%
+  - Reduce duplication of messages
+* Code
+  - Tidy up the mailbox API
+  - Tidy up the header cache API
+  - Tidy up the encryption API
+  - Add doxygen docs for more functions
+  - Refactor more structs to use STAILQ
+
 2018-05-12  Richard Russon  <rich@flatcap.org>
 * Features
   - echo command
@@ -68,7 +101,7 @@
   - Update Portuguese (BR) translation (100%)
   - Update Spanish translation (64%)
   - Update Turkish translation (75%)
-  - Merge simliar messages
+  - Merge similar messages
 * Docs
   - Clarify precedence of settings in config files
   - Fix subjectrx example in the manual
@@ -313,7 +346,7 @@
   - Updated French translation
   - Fix imap sync segfault due to inactive headers during an expunge
   - Close the imap socket for the selected mailbox on error
-  - Add missing IMAP_CMD_POLL flag in imap buffy check
+  - Add missing IMAP_CMD_POLL flag in imap mailbox check
   - Change maildir and mh check_mailbox to use dynamic sized hash
   - Fix uses of context->changed as a counter
   - Make cmd_parse_fetch() more precise about setting reopen/check flags
@@ -451,8 +484,8 @@
   - More sophisticated check for BDB version + support for DB6 (non default)
 * Tidy
   - drop VirtIncoming
-  - split mutt_parse_mailboxes into mutt_parse_unmailboxes
-  - tidy some buffy code
+  - split parse_mailboxes into parse_unmailboxes
+  - tidy some mailbox code
   - tidy the version strings
 * Upstream
   - Add ~<() and ~>() immediate parent/children patterns
@@ -512,7 +545,7 @@
 * Docs
   - Remove feature muttrc files
   - Merge README.notmuch into manual
-  - Remove unneded scripts
+  - Remove unneeded scripts
   - Remove README.SECURITY
   - Remove BEWARE and devel-notes.txt
   - Update Makefiles
@@ -937,7 +970,7 @@
   - Add option for missing subject replacement
   - notmuch: Allow <modify-labels> to toggle labels
   - Support for aborting mailbox loading
-  - Do a buffy check after shell escape
+  - Do a mailbox check after shell escape
   - Support of relative paths sourcing and cyclic source detection
   - Support of multiple config files as CLI arguments
   - Extend the ~m pattern to allow relative ranges
@@ -1342,14 +1375,14 @@
   - Add sidebar_format flag '%n' to display 'N' on new mail.
   - fix index_format truncation problem
   - Fix compiler warnings due to always true condition
-  - Change sidebar next/prev-new to look at buffy->new too.
+  - Change sidebar next/prev-new to look at mailbox->new too.
   - Change the default for sidebar_format to use %n.
-  - sidebar "unsorted" order to match Buffy list order.
+  - sidebar "unsorted" order to match Mailbox list order.
   - Include ncurses tinfo library if found.
   - Sidebar width problem
   - sidebar crash for non-existent mailbox
   - Temporary compatibility workaround
-  - Reset buffy->new for the current mailbox in IMAP.
+  - Reset mailbox->new for the current mailbox in IMAP.
   - version.sh regression
   - crash when notmuch tries to read a message
   - status line wrapping
@@ -1380,7 +1413,7 @@
   - Single quote at line beginning misinterpreted by groff
   - Setting $sidebar_width to more than 128 would cause bad things to happen.
   - Fix alignment in the compose menu.
-  - Fix sidebar buffy stats updating on mailbox close.
+  - Fix sidebar mailbox stats updating on mailbox close.
 * Build Changes
   - Sync whitespace to mutt/default
   - Alter ChangeLog date format to simplify Makefiles
